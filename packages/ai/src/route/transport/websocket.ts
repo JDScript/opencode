@@ -29,13 +29,44 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/AI
 const transportError = (
   method: string,
   message: string,
-  input: { readonly url?: string; readonly kind?: string } = {},
+  input: {
+    readonly url?: string
+    readonly kind?: string
+    readonly phase?: TransportReason["phase"]
+    readonly delivery?: TransportReason["delivery"]
+  } = {},
 ) =>
   new AIError({
     module: "WebSocketExecutor",
     method,
-    reason: new TransportReason({ message, url: input.url, kind: input.kind }),
+    reason: new TransportReason({
+      message,
+      url: input.url,
+      kind: input.kind,
+      phase: input.phase,
+      delivery: input.delivery,
+    }),
   })
+
+const annotateTransportError = (
+  error: AIError,
+  input: { readonly phase: TransportReason["phase"]; readonly delivery: TransportReason["delivery"] },
+) =>
+  error.reason._tag === "Transport"
+    ? new AIError({
+        module: error.module,
+        method: error.method,
+        reason: new TransportReason({
+          message: error.reason.message,
+          kind: error.reason.kind,
+          url: error.reason.url,
+          http: error.reason.http,
+          phase: input.phase,
+          delivery: input.delivery,
+          recovery: error.reason.recovery,
+        }),
+      })
+    : error
 
 const eventMessage = (event: Event) => {
   if ("message" in event && typeof event.message === "string") return event.message
@@ -56,6 +87,8 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
       transportError("open", `WebSocket closed before opening (state ${ws.readyState})`, {
         url: input.url,
         kind: "open",
+        phase: "connect",
+        delivery: "not-sent",
       }),
     )
   }
@@ -79,7 +112,12 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
       cleanup()
       resume(
         Effect.fail(
-          transportError("open", `Failed to open WebSocket: ${eventMessage(event)}`, { url: input.url, kind: "open" }),
+          transportError("open", `Failed to open WebSocket: ${eventMessage(event)}`, {
+            url: input.url,
+            kind: "open",
+            phase: "connect",
+            delivery: "not-sent",
+          }),
         ),
       )
     }
@@ -90,6 +128,8 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
           transportError("open", `WebSocket closed before opening with code ${event.code}`, {
             url: input.url,
             kind: "open",
+            phase: "connect",
+            delivery: "not-sent",
           }),
         ),
       )
@@ -119,6 +159,8 @@ const webSocketUrl = (value: string) =>
       transportError("prepare", error instanceof Error ? error.message : "Invalid WebSocket URL", {
         url: value,
         kind: "websocket",
+        phase: "prepare",
+        delivery: "not-sent",
       }),
   })
 
@@ -130,6 +172,8 @@ export const open = (input: WebSocketRequest) =>
       transportError("open", error instanceof Error ? error.message : "Failed to construct WebSocket", {
         url: input.url,
         kind: "open",
+        phase: "connect",
+        delivery: "not-sent",
       }),
   }).pipe(Effect.flatMap((ws) => fromWebSocket(ws, input)))
 
@@ -150,7 +194,11 @@ export const fromWebSocket = (
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", "Unsupported WebSocket message payload", { url: input.url, kind: "message" }),
+          transportError("message", "Unsupported WebSocket message payload", {
+            url: input.url,
+            kind: "message",
+            phase: "receive",
+          }),
         ),
       )
     }
@@ -158,16 +206,23 @@ export const fromWebSocket = (
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", `WebSocket error: ${eventMessage(event)}`, { url: input.url, kind: "message" }),
+          transportError("message", `WebSocket error: ${eventMessage(event)}`, {
+            url: input.url,
+            kind: "message",
+            phase: "receive",
+          }),
         ),
       )
     }
     const onClose = (event: CloseEvent) => {
-      if (event.code === 1000 || event.code === 1005) return Queue.endUnsafe(messages)
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", `WebSocket closed with code ${event.code}`, { url: input.url, kind: "close" }),
+          transportError("message", `WebSocket closed with code ${event.code}`, {
+            url: input.url,
+            kind: "close",
+            phase: "close",
+          }),
         ),
       )
     }
@@ -189,6 +244,8 @@ export const fromWebSocket = (
             transportError("sendText", error instanceof Error ? error.message : "Failed to send WebSocket message", {
               url: input.url,
               kind: "write",
+              phase: "send",
+              delivery: "not-sent",
             }),
         }),
       messages: Stream.fromQueue(messages),
@@ -244,6 +301,8 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
         transportError("json", "WebSocket JSON transport requires WebSocketExecutor.Service", {
           url: prepared.url,
           kind: "websocket",
+          phase: "prepare",
+          delivery: "not-sent",
         }),
       )
     }
@@ -251,11 +310,27 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
     return Stream.unwrap(
       Effect.gen(function* () {
         const connection = yield* Effect.acquireRelease(
-          webSocket.open({ url: prepared.url, headers: prepared.headers }),
+          webSocket
+            .open({ url: prepared.url, headers: prepared.headers })
+            .pipe(
+              Effect.mapError((error) => annotateTransportError(error, { phase: "connect", delivery: "not-sent" })),
+            ),
           (connection) => connection.close,
         )
         yield* connection.sendText(prepared.message)
-        return connection.messages.pipe(Stream.map((message) => messageText(message, decoder)))
+        let observed = false
+        return connection.messages.pipe(
+          Stream.map((message) => {
+            observed = true
+            return messageText(message, decoder)
+          }),
+          Stream.mapError((error) =>
+            annotateTransportError(error, {
+              phase: error.reason._tag === "Transport" && error.reason.phase === "close" ? "close" : "receive",
+              delivery: observed ? "accepted" : "ambiguous",
+            }),
+          ),
+        )
       }),
     )
   },
