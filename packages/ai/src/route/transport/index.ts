@@ -1,19 +1,33 @@
-import type { Effect, Stream } from "effect"
+import type { Effect, Scope, Stream } from "effect"
 import { Endpoint } from "../endpoint"
 import { Auth } from "../auth"
 import type { HttpMiddleware, Interface as RequestExecutorInterface } from "../executor"
-import type { Interface as WebSocketExecutorInterface } from "./websocket"
+import type { WebSocketChannelExecutor } from "./websocket-channel"
 import type { AIError, LLMRequest } from "../../schema"
 
 export interface TransportRuntime {
   readonly http: RequestExecutorInterface
-  readonly webSocket?: WebSocketExecutorInterface
+}
+
+export interface TransportExecution<Frame> {
+  readonly frames: Stream.Stream<Frame, AIError>
+  /** Optional successful-consumption acknowledgement. HTTP leaves this absent. */
+  readonly complete?: Effect.Effect<void>
+}
+
+export interface TransportExecuteOptions {
+  readonly webSocket?: WebSocketChannelExecutor
 }
 
 export interface Transport<Body, Prepared, Frame> {
   readonly id: string
   readonly prepare: (input: TransportPrepareInput<Body>) => Effect.Effect<Prepared, AIError>
-  readonly frames: (prepared: Prepared, request: LLMRequest, runtime: TransportRuntime) => Stream.Stream<Frame, AIError>
+  readonly execute: (
+    prepared: Prepared,
+    request: LLMRequest,
+    runtime: TransportRuntime,
+    options?: TransportExecuteOptions,
+  ) => Effect.Effect<TransportExecution<Frame>, AIError, Scope.Scope>
 }
 
 export interface TransportPrepareInput<Body> {
@@ -28,4 +42,14 @@ export interface TransportPrepareInput<Body> {
 
 export * as HttpTransport from "./http"
 export type { HttpHandler, HttpMiddleware } from "../executor"
-export { WebSocketExecutor, WebSocketTransport } from "./websocket"
+export type {
+  ChannelCheckpoint,
+  ChannelCreate,
+  ChannelObservation,
+  WebSocketChannelDriver,
+  WebSocketChannelExchange,
+  WebSocketChannelExecution,
+  WebSocketChannelExecutor,
+} from "./websocket-channel"
+export type { WebSocketConnection, WebSocketConnector, WebSocketRequest } from "./websocket"
+export { WebSocketTransport } from "./websocket"
