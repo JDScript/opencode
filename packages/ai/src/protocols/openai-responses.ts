@@ -1,15 +1,24 @@
-import { Effect, Encoding, Schema } from "effect"
+import { Effect, Encoding, Schema, Stream } from "effect"
+import { Headers } from "effect/unstable/http"
 import { Route } from "../route/client"
 import { Auth } from "../route/auth"
 import { Endpoint } from "../route/endpoint"
+import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
-import { HttpTransport, WebSocketTransport } from "../route/transport"
+import {
+  HttpTransport,
+  WebSocketTransport,
+  type Transport,
+  type WebSocketChannelDriver,
+  type WebSocketChannelExchange,
+} from "../route/transport"
 import { LLMEvent, LLMRequest, type JsonSchema, type ToolDefinition } from "../schema"
 import { OpenResponses } from "./open-responses"
 import { optionalArray, ProviderShared } from "./shared"
 import { Lifecycle } from "./utils/lifecycle"
 import { OpenAIImage } from "./utils/openai-image"
 import { ToolSchemaProjection } from "./utils/tool-schema"
+import { OpenAIResponsesChannel } from "./openai-responses-channel"
 
 const ADAPTER = "openai-responses"
 const NAME = "OpenAI Responses"
@@ -250,17 +259,6 @@ const auth = Auth.none
 
 export const httpTransport = HttpTransport.sseJson.with<OpenAIResponsesBody>()
 
-export const route = Route.make({
-  id: ADAPTER,
-  provider: "openai",
-  providerMetadataKey: "openai",
-  protocol,
-  endpoint,
-  auth,
-  transport: httpTransport,
-  defaults: { providerOptions: { openai: { store: false } } },
-})
-
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
 
 const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =>
@@ -271,22 +269,58 @@ const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =
     return yield* decodeWebSocketMessage({ ...message, type: "response.create" })
   })
 
-export const webSocketTransport = WebSocketTransport.jsonTransport.with<
-  OpenAIResponsesBody,
-  OpenAIResponsesWebSocketMessage
->({
-  toMessage: webSocketMessage,
-  encodeMessage: encodeWebSocketMessage,
-})
+export interface OpenAIResponsesPrepared {
+  readonly http: HttpTransport.HttpPrepared<string>
+  readonly channel?: {
+    readonly url: string
+    readonly headers: Headers.Headers
+    readonly driver: WebSocketChannelDriver
+  }
+}
 
-export const webSocketRoute = Route.make({
-  id: `${ADAPTER}-websocket`,
+export const transport: Transport<OpenAIResponsesBody, OpenAIResponsesPrepared, string> = {
+  id: httpTransport.id,
+  prepare: (input) =>
+    Effect.gen(function* () {
+      const parts = yield* HttpTransport.jsonRequestParts(input)
+      return {
+        http: {
+          request: ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
+          framing: Framing.sse,
+          middleware: input.middleware,
+        },
+        channel: input.webSocket
+          ? {
+              url: yield* WebSocketTransport.toWebSocketUrl(parts.url),
+              headers: parts.headers,
+              driver: OpenAIResponsesChannel.make(encodeWebSocketMessage(yield* webSocketMessage(parts.jsonBody))),
+            }
+          : undefined,
+      }
+    }),
+  execute: (prepared, request, runtime, options) => {
+    if (!options?.webSocket || !prepared.channel) return httpTransport.execute(prepared.http, request, runtime)
+    const exchange: WebSocketChannelExchange = {
+      id: request.id ?? "request",
+      connect: { url: prepared.channel.url, headers: prepared.channel.headers },
+      fallback: () =>
+        Stream.unwrap(
+          httpTransport.execute(prepared.http, request, runtime).pipe(Effect.map((execution) => execution.frames)),
+        ),
+      driver: prepared.channel.driver,
+    }
+    return options.webSocket.execute(exchange)
+  },
+}
+
+export const route = Route.make({
+  id: ADAPTER,
   provider: "openai",
   providerMetadataKey: "openai",
   protocol,
   endpoint,
   auth,
-  transport: webSocketTransport,
+  transport,
   defaults: { providerOptions: { openai: { store: false } } },
 })
 

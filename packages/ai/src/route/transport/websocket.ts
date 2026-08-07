@@ -146,7 +146,7 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
   })
 }
 
-const webSocketUrl = (value: string) =>
+export const toWebSocketUrl = (value: string) =>
   Effect.try({
     try: () => {
       const url = new URL(value)
@@ -351,7 +351,7 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
         ...prepareInput,
       })
       return {
-        url: yield* webSocketUrl(parts.url),
+        url: yield* toWebSocketUrl(parts.url),
         headers: parts.headers,
         message: input.encodeMessage(yield* input.toMessage(parts.jsonBody)),
       }
@@ -403,4 +403,5 @@ export const WebSocketTransport = {
   open,
   fromWebSocket,
   messageText,
+  toWebSocketUrl,
 } as const
