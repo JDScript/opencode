@@ -9,6 +9,7 @@ import {
   adaptiveSessionTabLayout,
   moveSessionTab,
   NEW_SESSION_TAB_TITLE,
+  sessionTabBranch,
   sessionTabComplete,
   sessionTabShortcutLabel,
   seedSessionTabMotion,
@@ -148,9 +149,24 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const visibleTitleParts = createMemo(() => Locale.graphemes(visibleTitle()))
               const titleFades = createMemo(() => stringWidth(title()) >= titleWidth() && titleWidth() > FADE_WIDTH)
               const detail = createMemo(() => {
-                if (tab === NEW_SESSION_TAB) return Locale.takeWidth("Start a new session", titleWidth())
+                if (tab === NEW_SESSION_TAB)
+                  return { project: Locale.takeWidth("Start a new session", titleWidth()), branch: undefined }
                 const value = session()
-                return Locale.takeWidth(projectName(project(), value?.location.directory) ?? "", titleWidth())
+                const projectLabel = projectName(project(), value?.location.directory) ?? ""
+                const vcs = value ? data.location.vcs.info(value.location) : undefined
+                const branch = sessionTabBranch(vcs?.branch.current, vcs?.branch.default)
+                if (!branch) return { project: Locale.takeWidth(projectLabel, titleWidth()), branch: undefined }
+
+                const separatorWidth = projectLabel ? 1 : 0
+                const branchWidth = Math.min(
+                  branch.length,
+                  Math.max(1, titleWidth() - Math.min(projectLabel.length, 12) - separatorWidth),
+                )
+                const projectWidth = Math.max(0, titleWidth() - branchWidth - separatorWidth)
+                return {
+                  project: Locale.takeWidth(projectLabel, projectWidth),
+                  branch: Locale.truncateLeft(branch, branchWidth),
+                }
               })
               const background = createMemo(() => {
                 if (selected()) return theme.background.action.primary.selected
@@ -184,6 +200,7 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const detailPulseColor = createMemo(() => tint(pulseBackground(), theme.text.default, 0.13))
               const detailGlowColor = createMemo(() => tint(pulseBackground(), glowHue(), 0.25))
               const detailColor = createMemo(() => tint(theme.text.subdued, pulseBackground(), 0.35))
+              const branchColor = createMemo(() => tint(detailColor(), accent(), 0.45))
               const glows = () => status().glows
               const previous = createMemo(() => items()[index() - 1])
               const previousStatus = createMemo(() => {
@@ -359,9 +376,21 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
                       backgroundColor={pulseBackground()}
                     />
                     <box zIndex={1} width="100%" flexDirection="row" paddingLeft={numberWidth() + 1} paddingRight={2}>
-                      <text fg={detailColor()} wrapMode="none" selectable={false}>
-                        {detail()}
-                      </text>
+                      <Show when={detail().project}>
+                        {(project) => (
+                          <text fg={detailColor()} wrapMode="none" selectable={false}>
+                            {project()}
+                          </text>
+                        )}
+                      </Show>
+                      <Show when={detail().branch}>
+                        {(branch) => (
+                          <text fg={branchColor()} wrapMode="none" selectable={false}>
+                            {detail().project ? " " : ""}
+                            {branch()}
+                          </text>
+                        )}
+                      </Show>
                     </box>
                   </box>
                 </box>

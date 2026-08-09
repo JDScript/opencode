@@ -11,11 +11,19 @@ import {
   reopenSessionTab,
   seedSessionTabMotion,
   sessionTabComplete,
+  sessionTabBranch,
   sessionTabOverflowWidth,
   sessionTabShortcutLabel,
 } from "../../src/context/session-tabs-model"
 
 describe("session tabs", () => {
+  test("shows only non-default session branches", () => {
+    expect(sessionTabBranch("main", "main")).toBeUndefined()
+    expect(sessionTabBranch("feature/sidebar", "main")).toBe("feature/sidebar")
+    expect(sessionTabBranch("feature/sidebar", undefined)).toBe("feature/sidebar")
+    expect(sessionTabBranch(undefined, "main")).toBeUndefined()
+  })
+
   test("labels direct shortcut tabs and marks unbound tabs with a dot", () => {
     expect(Array.from({ length: 12 }, (_, index) => sessionTabShortcutLabel(index))).toEqual([
       "1",

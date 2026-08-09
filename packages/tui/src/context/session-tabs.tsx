@@ -157,9 +157,9 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       })
     })
 
-    // Load lightweight session metadata concurrently so persisted tabs can resolve their project
-    // labels immediately. Delay the heavier per-tab data so the visible session keeps the first
-    // connection slots and switches still render from a warm cache.
+    // Load lightweight session and location metadata concurrently so persisted tabs can resolve
+    // their project and branch labels. Delay the heavier per-tab data so the visible session keeps
+    // the first connection slots and switches still render from a warm cache.
     const openTabSessions = createMemo(() =>
       state()
         .tabs.map((tab) => tab.sessionID)
@@ -171,8 +171,19 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       if (client.connection.status() !== "connected") return
       const sessionIDs = openTabSessions()
       if (sessionIDs === "") return
-      void Promise.allSettled(sessionIDs.split("\n").map((sessionID) => data.session.sync(sessionID)))
       let stale = false
+      void (async () => {
+        await Promise.allSettled(sessionIDs.split("\n").map((sessionID) => data.session.sync(sessionID)))
+        if (stale) return
+        const locations = new Map(
+          sessionIDs
+            .split("\n")
+            .map((sessionID) => data.session.get(sessionID)?.location)
+            .filter((location) => location !== undefined)
+            .map((location) => [`${location.directory}\n${location.workspaceID ?? ""}`, location]),
+        )
+        await Promise.allSettled(Array.from(locations.values(), (location) => data.location.vcs.sync(location)))
+      })()
       const timer = setTimeout(async () => {
         const sessions = state()
           .tabs.map((tab) => tab.sessionID)

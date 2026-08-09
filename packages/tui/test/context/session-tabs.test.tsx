@@ -27,7 +27,14 @@ async function wait(fn: () => boolean | Promise<boolean>, timeout = 2_000) {
 
 async function renderSessionTabs(
   initialSessionID: string,
-  options?: { state?: string; title?: string; home?: boolean; persisted?: string[]; sessionGate?: Promise<void> },
+  options?: {
+    state?: string
+    title?: string
+    home?: boolean
+    persisted?: string[]
+    sessionGate?: Promise<void>
+    sessionDirectories?: Record<string, string>
+  },
 ) {
   const temporary = options?.state ? undefined : await tmpdir()
   const state = options?.state ?? temporary!.path
@@ -44,7 +51,16 @@ async function renderSessionTabs(
   }
   const events = createEventStream()
   const sessions: string[] = []
+  const vcsLocations: string[] = []
   const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/vcs") {
+      const requested = url.searchParams.get("location[directory]") ?? directory
+      vcsLocations.push(requested)
+      return json({
+        location: { directory: requested },
+        data: { branch: { current: "main", default: "main" } },
+      })
+    }
     const sessionID = url.pathname.match(/^\/api\/session\/([^/]+)$/)?.[1]
     if (!sessionID) return undefined
     sessions.push(sessionID)
@@ -54,7 +70,7 @@ async function renderSessionTabs(
         id: sessionID,
         title: sessionID === initialSessionID ? options?.title : undefined,
         projectID: "project",
-        location: { directory },
+        location: { directory: options?.sessionDirectories?.[sessionID] ?? directory },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: 0, updated: 0 },
@@ -104,6 +120,7 @@ async function renderSessionTabs(
     route,
     data,
     sessions,
+    vcsLocations,
     state,
     emit: (event: OpenCodeEvent) => events.emit({ ...event, location: { directory } }),
     async destroy() {
@@ -130,6 +147,21 @@ test("loads persisted tab metadata concurrently on connect", async () => {
     await wait(() => setup.data.session.get("first") !== undefined && setup.data.session.get("second") !== undefined)
   } finally {
     release()
+    await setup.destroy()
+  }
+})
+
+test("loads VCS metadata for each persisted tab location", async () => {
+  const other = `${directory}/other-worktree`
+  const setup = await renderSessionTabs("first", {
+    home: true,
+    persisted: ["first", "second"],
+    sessionDirectories: { second: other },
+  })
+
+  try {
+    await wait(() => setup.vcsLocations.includes(other))
+  } finally {
     await setup.destroy()
   }
 })
