@@ -200,7 +200,6 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const detailPulseColor = createMemo(() => tint(pulseBackground(), theme.text.default, 0.13))
               const detailGlowColor = createMemo(() => tint(pulseBackground(), glowHue(), 0.25))
               const detailColor = createMemo(() => tint(theme.text.subdued, pulseBackground(), 0.35))
-              const branchColor = createMemo(() => tint(detailColor(), accent(), 0.45))
               const glows = () => status().glows
               const previous = createMemo(() => items()[index() - 1])
               const previousStatus = createMemo(() => {
@@ -376,21 +375,9 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
                       backgroundColor={pulseBackground()}
                     />
                     <box zIndex={1} width="100%" flexDirection="row" paddingLeft={numberWidth() + 1} paddingRight={2}>
-                      <Show when={detail().project}>
-                        {(project) => (
-                          <text fg={detailColor()} wrapMode="none" selectable={false}>
-                            {project()}
-                          </text>
-                        )}
-                      </Show>
-                      <Show when={detail().branch}>
-                        {(branch) => (
-                          <text fg={branchColor()} wrapMode="none" selectable={false}>
-                            {detail().project ? " " : ""}
-                            {branch()}
-                          </text>
-                        )}
-                      </Show>
+                      <text fg={detailColor()} wrapMode="none" selectable={false}>
+                        {`${detail().project}${detail().project && detail().branch ? " " : ""}${detail().branch ?? ""}`}
+                      </text>
                     </box>
                   </box>
                 </box>
