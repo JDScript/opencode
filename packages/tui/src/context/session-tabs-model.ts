@@ -18,6 +18,11 @@ export function sessionTabBranch(current: string | undefined, defaultBranch: str
   return current
 }
 
+export function sessionTabDetail(project: string, current: string | undefined, defaultBranch: string | undefined) {
+  const branch = sessionTabBranch(current, defaultBranch)
+  return branch && project ? `${project}:${branch}` : (branch ?? project)
+}
+
 export type SessionTabHistory = {
   entries: readonly string[]
   index: number

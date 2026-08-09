@@ -12,6 +12,7 @@ import {
   seedSessionTabMotion,
   sessionTabComplete,
   sessionTabBranch,
+  sessionTabDetail,
   sessionTabOverflowWidth,
   sessionTabShortcutLabel,
 } from "../../src/context/session-tabs-model"
@@ -22,6 +23,11 @@ describe("session tabs", () => {
     expect(sessionTabBranch("feature/sidebar", "main")).toBe("feature/sidebar")
     expect(sessionTabBranch("feature/sidebar", undefined)).toBe("feature/sidebar")
     expect(sessionTabBranch(undefined, "main")).toBeUndefined()
+  })
+
+  test("separates the project and branch with a colon", () => {
+    expect(sessionTabDetail("opencode", "feature/sidebar", "main")).toBe("opencode:feature/sidebar")
+    expect(sessionTabDetail("opencode", "main", "main")).toBe("opencode")
   })
 
   test("labels direct shortcut tabs and marks unbound tabs with a dot", () => {

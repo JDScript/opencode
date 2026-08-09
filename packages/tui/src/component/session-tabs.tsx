@@ -9,8 +9,8 @@ import {
   adaptiveSessionTabLayout,
   moveSessionTab,
   NEW_SESSION_TAB_TITLE,
-  sessionTabBranch,
   sessionTabComplete,
+  sessionTabDetail,
   sessionTabShortcutLabel,
   seedSessionTabMotion,
   sessionTabOverflowWidth,
@@ -149,25 +149,15 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const visibleTitleParts = createMemo(() => Locale.graphemes(visibleTitle()))
               const titleFades = createMemo(() => stringWidth(title()) >= titleWidth() && titleWidth() > FADE_WIDTH)
               const detail = createMemo(() => {
-                if (tab === NEW_SESSION_TAB)
-                  return { project: Locale.takeWidth("Start a new session", titleWidth()), branch: undefined }
+                if (tab === NEW_SESSION_TAB) return "Start a new session"
                 const value = session()
                 const projectLabel = projectName(project(), value?.location.directory) ?? ""
                 const vcs = value ? data.location.vcs.info(value.location) : undefined
-                const branch = sessionTabBranch(vcs?.branch.current, vcs?.branch.default)
-                if (!branch) return { project: Locale.takeWidth(projectLabel, titleWidth()), branch: undefined }
-
-                const separatorWidth = projectLabel ? 1 : 0
-                const branchWidth = Math.min(
-                  branch.length,
-                  Math.max(1, titleWidth() - Math.min(projectLabel.length, 12) - separatorWidth),
-                )
-                const projectWidth = Math.max(0, titleWidth() - branchWidth - separatorWidth)
-                return {
-                  project: Locale.takeWidth(projectLabel, projectWidth),
-                  branch: Locale.truncateLeft(branch, branchWidth),
-                }
+                return sessionTabDetail(projectLabel, vcs?.branch.current, vcs?.branch.default)
               })
+              const visibleDetail = createMemo(() => Locale.takeWidth(detail(), titleWidth()))
+              const visibleDetailParts = createMemo(() => Locale.graphemes(visibleDetail()))
+              const detailFades = createMemo(() => stringWidth(detail()) >= titleWidth() && titleWidth() > FADE_WIDTH)
               const background = createMemo(() => {
                 if (selected()) return theme.background.action.primary.selected
                 if (hovered() === tab.sessionID || dragging() === tab.sessionID)
@@ -200,6 +190,11 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
               const detailPulseColor = createMemo(() => tint(pulseBackground(), theme.text.default, 0.13))
               const detailGlowColor = createMemo(() => tint(pulseBackground(), glowHue(), 0.25))
               const detailColor = createMemo(() => tint(theme.text.subdued, pulseBackground(), 0.35))
+              const detailTextColor = (index: number) => {
+                if (!detailFades() || index < visibleDetailParts().length - FADE_WIDTH) return detailColor()
+                const position = index - (visibleDetailParts().length - FADE_WIDTH)
+                return tint(detailColor(), pulseBackground(), 0.2 + 0.72 * (position / Math.max(1, FADE_WIDTH - 1)))
+              }
               const glows = () => status().glows
               const previous = createMemo(() => items()[index() - 1])
               const previousStatus = createMemo(() => {
@@ -376,7 +371,11 @@ function VerticalSessionTabs(props: { controller?: SessionTabsController; animat
                     />
                     <box zIndex={1} width="100%" flexDirection="row" paddingLeft={numberWidth() + 1} paddingRight={2}>
                       <text fg={detailColor()} wrapMode="none" selectable={false}>
-                        {`${detail().project}${detail().project && detail().branch ? " " : ""}${detail().branch ?? ""}`}
+                        <Show when={detailFades()} fallback={visibleDetail()}>
+                          <For each={visibleDetailParts()}>
+                            {(character, index) => <span style={{ fg: detailTextColor(index()) }}>{character}</span>}
+                          </For>
+                        </Show>
                       </text>
                     </box>
                   </box>
