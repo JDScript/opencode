@@ -6,7 +6,6 @@ import { App } from "../../app"
 import { Credential } from "../../credential"
 import { Bus } from "../../bus"
 import { Integration } from "../../integration"
-import { Model } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
 import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
@@ -198,10 +197,10 @@ export const OpenAIPlugin = define({
       if (!item) return
       item.provider.settings = Provider.mergeOverlay(item.provider.settings, { baseURL: codexBaseURL })
       const account = chatgpt.metadata?.accountID
-      item.provider.headers = Provider.mergeHeaders(
-        item.provider.headers,
-        typeof account === "string" ? { "chatgpt-account-id": account } : undefined,
-      )
+      item.provider.headers = Provider.mergeHeaders(item.provider.headers, {
+        originator: "opencode",
+        ...(typeof account === "string" ? { "chatgpt-account-id": account } : {}),
+      })
       for (const model of item.models.values()) {
         // ChatGPT-plan tokens only authorize codex-eligible models, and the
         // subscription covers usage, so hide the rest and zero the cost.
@@ -225,17 +224,6 @@ export const OpenAIPlugin = define({
         })
       }
     })
-    yield* ctx.session.hook("http", (evt) =>
-      evt.use((request, next) => {
-        if (!chatgpt || evt.model.providerID !== Provider.ID.openai) return next(request)
-        const url = new URL(request.url)
-        request.headers.set("originator", "opencode")
-        request.headers.set("session-id", evt.sessionID)
-        if (url.origin !== "https://api.openai.com") return next(request)
-        return next(new Request(`${codexBaseURL}${url.pathname.replace(/^\/v1/, "")}${url.search}`, request))
-      }),
-    )
-
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* bus.subscribe(Integration.Event.ConnectionUpdated).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("openai")),

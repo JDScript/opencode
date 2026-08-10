@@ -12,7 +12,6 @@ import { PluginHost } from "@opencode-ai/core/plugin/host"
 import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
 import { OpenAIPlugin } from "@opencode-ai/core/plugin/provider/openai"
 import { Provider } from "@opencode-ai/core/provider"
-import type { SessionHttpHandler } from "@opencode-ai/plugin/effect/session"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -30,27 +29,15 @@ function required<T>(value: T | undefined): T {
   return value
 }
 
-const http = Effect.fn(function* (providerID: Provider.ID, url: string) {
+const httpMiddlewareCount = Effect.fn(function* () {
   const middlewares: Parameters<PluginHooks.Domains["session"]["http"]["use"]>[0][] = []
   yield* (yield* PluginHooks.Service).trigger("session", "http", {
     sessionID: Session.ID.make("ses_test"),
     agent: Agent.ID.make("build"),
-    model: Model.Ref.make({ providerID, id: Model.ID.make("gpt-5.5") }),
-    use: (item) =>
-      Effect.sync(() => {
-        middlewares.push(item)
-      }),
+    model: Model.Ref.make({ providerID: Provider.ID.openai, id: Model.ID.make("gpt-5.5") }),
+    use: (middleware) => Effect.sync(() => middlewares.push(middleware)),
   })
-  const request = middlewares.reduce<SessionHttpHandler>(
-    (next, item) => (input: Request) => item(input, next),
-    (input: Request) => {
-      const headers = new Headers(input.headers)
-      headers.set("x-seen-url", input.url)
-      return Effect.succeed(new Response(null, { headers }))
-    },
-  )
-  const response = yield* request(new Request(url, { method: "POST", body: "{}" }))
-  return { url: response.headers.get("x-seen-url"), headers: Object.fromEntries(response.headers.entries()) }
+  return middlewares.length
 })
 
 describe("OpenAIPlugin", () => {
@@ -124,30 +111,18 @@ describe("OpenAIPlugin", () => {
       })
       yield* addPlugin()
 
-      const request = yield* http(Provider.ID.openai, "https://api.openai.com/v1/responses")
-      const custom = yield* http(Provider.ID.make("custom-openai"), "https://custom.example/v1/responses")
-      const proxy = yield* http(Provider.ID.openai, "https://proxy.example/v1/responses?region=us")
-
       const provider = required(yield* catalog.provider.get(Provider.ID.openai))
       expect(provider.package).toBe("@opencode-ai/ai/providers/openai")
       expect(provider.settings).toMatchObject({ baseURL: "https://chatgpt.com/backend-api/codex" })
-      expect(provider.headers).toMatchObject({ "chatgpt-account-id": "acct_123" })
-      expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-      expect(request.headers).toMatchObject({ originator: "opencode", "session-id": "ses_test" })
-      expect(custom.headers).not.toHaveProperty("originator")
-      expect(proxy.url).toBe("https://proxy.example/v1/responses?region=us")
-      expect(proxy.headers).toMatchObject({ originator: "opencode", "session-id": "ses_test" })
+      expect(provider.headers).toMatchObject({ originator: "opencode", "chatgpt-account-id": "acct_123" })
+      expect(yield* httpMiddlewareCount()).toBe(0)
       const eligible = required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.5")))
       expect(eligible.package).toBe("@opencode-ai/ai/providers/openai")
       expect(eligible.cost).toEqual([])
       expect(eligible.limit).toEqual({ context: 272_000, input: 272_000, output: 128_000 })
       expect(eligible.enabled).toBe(true)
-      expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.5-pro"))).enabled).toBe(
-        false,
-      )
-      expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.4-pro"))).enabled).toBe(
-        false,
-      )
+      expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.5-pro"))).enabled).toBe(false)
+      expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.4-pro"))).enabled).toBe(false)
       expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.4"))).limit).toEqual({
         context: 272_000,
         input: 272_000,
@@ -184,15 +159,14 @@ describe("OpenAIPlugin", () => {
       })
       yield* addPlugin()
 
-      const request = yield* http(Provider.ID.openai, "https://api.openai.com/v1/responses")
-
+      const provider = required(yield* catalog.provider.get(Provider.ID.openai))
       const model = required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-5.5")))
       expect(model.package).toBe("@opencode-ai/ai/providers/openai")
       expect(model.enabled).toBe(true)
       expect(model.limit).toEqual({ context: 1_050_000, input: 922_000, output: 128_000 })
-      expect(request.headers).not.toHaveProperty("originator")
+      expect(provider.headers).not.toHaveProperty("originator")
+      expect(yield* httpMiddlewareCount()).toBe(0)
       expect(required(yield* catalog.model.get(Provider.ID.openai, Model.ID.make("gpt-4.1"))).enabled).toBe(true)
     }),
   )
-
 })

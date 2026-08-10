@@ -46,6 +46,8 @@ const declineDefect = (cause: Cause.Cause<Tool.Error>) => {
 interface Prepared {
   readonly request: LLMRequest
   readonly options: StreamOptions
+  /** False when Session HTTP middleware requires the request to remain on HTTP. */
+  readonly webSocketEligible: boolean
   /**
    * One request-scoped execution operation. Unknown, hook-removed, and
    * step-limit-violating calls fail individually through the same seam.
@@ -74,6 +76,40 @@ const unsupportedMedia = (mime: string, name: string | undefined, capabilities: 
     type: "text" as const,
     text: `ERROR: Cannot read ${name ? `"${name}"` : modality} (this model does not support ${modality} input). Inform the user.`,
   }
+}
+
+export const composeHttpMiddleware = (middlewares: ReadonlyArray<SessionHttpMiddleware>): StreamOptions["http"] => {
+  if (middlewares.length === 0) return undefined
+  return (request, handler) =>
+    Effect.gen(function* () {
+      let latest = request
+      const origins = new WeakMap<Response, HttpClientRequest.HttpClientRequest>()
+      const web = yield* HttpClientRequest.toWeb(request)
+      const send = (input: Request) =>
+        Effect.gen(function* () {
+          let sent = HttpClientRequest.fromWeb(input)
+          if (input.body)
+            sent = HttpClientRequest.bodyUint8Array(
+              sent,
+              new Uint8Array(yield* Effect.promise(() => input.clone().arrayBuffer())),
+              input.headers.get("content-type") ?? undefined,
+            )
+          latest = sent
+          const response = yield* handler(sent)
+          const body = [204, 205, 304].includes(response.status)
+            ? null
+            : yield* Stream.toReadableStreamEffect(response.stream)
+          const output = new Response(body, { status: response.status, headers: response.headers })
+          origins.set(output, sent)
+          return output
+        })
+      const dispatch = middlewares.reduce<SessionHttpHandler>(
+        (next, item) => (input: Request) => item(input, next),
+        send,
+      )
+      const response = yield* dispatch(web)
+      return HttpClientResponse.fromWeb(origins.get(response) ?? latest, response)
+    }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
 }
 
 export const unsupportedParts = (messages: LLMRequest["messages"], capabilities: Model.Capabilities) =>
@@ -227,49 +263,18 @@ export const layer = Layer.effect(
         tools: Array.from(hooked, ([name, tool]) => ({ ...tool, name })),
         toolChoice: stepLimitReached ? "none" : undefined,
       })
-      const options: StreamOptions = {
-        http: (request, handler) =>
-          Effect.gen(function* () {
-            let latest = request
-            const origins = new WeakMap<Response, HttpClientRequest.HttpClientRequest>()
-            const middlewares: SessionHttpMiddleware[] = []
-            const web = yield* HttpClientRequest.toWeb(request)
-            yield* hooks.trigger("session", "http", {
-              sessionID: session.id,
-              agent: agent.id,
-              model: resolved.ref,
-              use: (item) =>
-                Effect.sync(() => {
-                  middlewares.push(item)
-                }),
-            })
-            const send = (input: Request) =>
-              Effect.gen(function* () {
-                let sent = HttpClientRequest.fromWeb(input)
-                if (input.body)
-                  sent = HttpClientRequest.bodyUint8Array(
-                    sent,
-                    new Uint8Array(yield* Effect.promise(() => input.clone().arrayBuffer())),
-                    input.headers.get("content-type") ?? undefined,
-                  )
-                latest = sent
-                const response = yield* handler(sent)
-                const body = [204, 205, 304].includes(response.status)
-                  ? null
-                  : yield* Stream.toReadableStreamEffect(response.stream)
-                const output = new Response(body, { status: response.status, headers: response.headers })
-                origins.set(output, sent)
-                return output
-              })
-            const dispatch = middlewares.reduce<SessionHttpHandler>(
-              (next, item) => (input: Request) => item(input, next),
-              send,
-            )
-            const response = yield* dispatch(web)
-            const origin = origins.get(response) ?? latest
-            return HttpClientResponse.fromWeb(origin, response)
-          }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))),
-      }
+      const middlewares: SessionHttpMiddleware[] = []
+      yield* hooks.trigger("session", "http", {
+        sessionID: session.id,
+        agent: agent.id,
+        model: resolved.ref,
+        use: (item) =>
+          Effect.sync(() => {
+            middlewares.push(item)
+          }),
+      })
+      const http = composeHttpMiddleware(middlewares)
+      const options: StreamOptions = http ? { http } : {}
       if (promptCacheSnapshots) {
         const current = PromptCacheDiagnostics.snapshot(request)
         const comparison = PromptCacheDiagnostics.compare(promptCacheSnapshots.get(session.id), current)
@@ -301,6 +306,7 @@ export const layer = Layer.effect(
       return {
         request,
         options,
+        webSocketEligible: middlewares.length === 0,
         executeTool,
         stepLimitReached,
       }

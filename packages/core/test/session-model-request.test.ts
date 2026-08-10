@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { Message, ToolResultPart } from "@opencode-ai/ai"
-import { boundImages, unsupportedParts } from "@opencode-ai/core/session/model-request"
+import { boundImages, composeHttpMiddleware, unsupportedParts } from "@opencode-ai/core/session/model-request"
+import type { SessionHttpMiddleware } from "@opencode-ai/plugin/effect/session"
+import { Effect } from "effect"
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 
 const capabilities = (input: string[]) => ({ tools: true, input, output: ["text"] })
 
@@ -108,5 +111,62 @@ describe("SessionModelRequest.boundImages", () => {
         value: [{ type: "text" }, { type: "file", name: "second.png" }],
       },
     })
+  })
+})
+
+describe("SessionModelRequest.composeHttpMiddleware", () => {
+  test("keeps WebSocket eligibility when no middleware is registered", () => {
+    expect(composeHttpMiddleware([])).toBeUndefined()
+  })
+
+  test("forces HTTP when middleware is registered", () => {
+    expect(composeHttpMiddleware([(request, next) => next(request)])).toBeFunction()
+  })
+
+  test("preserves middleware nesting order", async () => {
+    const order: string[] = []
+    const middleware =
+      (name: string): SessionHttpMiddleware =>
+      (request, next) =>
+        Effect.sync(() => order.push(`${name}:before`)).pipe(
+          Effect.andThen(next(request)),
+          Effect.tap(() => Effect.sync(() => order.push(`${name}:after`))),
+        )
+    const composed = composeHttpMiddleware([middleware("first"), middleware("second")])
+    if (!composed) throw new Error("Expected HTTP middleware")
+    const request = HttpClientRequest.post("https://provider.test/responses").pipe(
+      HttpClientRequest.bodyText("payload", "text/plain"),
+    )
+    const response = await Effect.runPromise(
+      composed(request, (sent) =>
+        Effect.sync(() => {
+          order.push("send")
+          return HttpClientResponse.fromWeb(sent, new Response("response"))
+        }),
+      ),
+    )
+
+    expect(order).toEqual(["second:before", "first:before", "send", "first:after", "second:after"])
+    expect(await Effect.runPromise(response.text)).toBe("response")
+  })
+
+  test("preserves a synthetic replacement response", async () => {
+    let sent = false
+    const composed = composeHttpMiddleware([() => Effect.succeed(new Response("synthetic", { status: 202 }))])
+    if (!composed) throw new Error("Expected HTTP middleware")
+    const request = HttpClientRequest.post("https://provider.test/responses")
+    const response = await Effect.runPromise(
+      composed(request, (input) =>
+        Effect.sync(() => {
+          sent = true
+          return HttpClientResponse.fromWeb(input, new Response("network"))
+        }),
+      ),
+    )
+
+    expect(sent).toBe(false)
+    expect(response.status).toBe(202)
+    expect(response.request.url).toBe(request.url)
+    expect(await Effect.runPromise(response.text)).toBe("synthetic")
   })
 })

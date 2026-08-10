@@ -897,6 +897,26 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("collects session HTTP middleware once per prepared request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const hooks = yield* PluginHooks.Service
+      let triggers = 0
+      yield* hooks.register("session", "http", (event) =>
+        Effect.gen(function* () {
+          triggers++
+          yield* event.use((request, next) => next(request))
+        }),
+      )
+      yield* admit(session, "Use HTTP middleware")
+      yield* TestLLM.push(TestLLM.text("Done", "text-http-middleware"))
+
+      yield* session.resume(sessionID)
+
+      expect(triggers).toBe(1)
+    }),
+  )
+
   it.effect("executes a tool renamed by a session context hook", () =>
     Effect.gen(function* () {
       const session = yield* setup
