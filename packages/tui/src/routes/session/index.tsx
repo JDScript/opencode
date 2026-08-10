@@ -114,6 +114,7 @@ const NAVIGATION_SLACK_ID = "session-navigation-slack"
 const TRANSCRIPT_TAIL_ROWS = 40
 const TRANSCRIPT_BACKFILL_CHUNK = 60
 const TRANSCRIPT_BACKFILL_DELAY = 120
+const BACKGROUND_TOOL_HINT_DELAY = 3_000
 type PendingAction = "steer" | "queue" | "cancel"
 
 const context = createContext<{
@@ -1056,7 +1057,6 @@ export function Session() {
                   />
                 )}
               </For>
-              <BackgroundToolHint messages={messages()} />
               <Show when={session()?.revert?.messageID}>
                 <RevertMessage
                   count={messagesFromRevert().filter((message) => message.type === "user").length}
@@ -1112,6 +1112,7 @@ export function Session() {
                       return mutatePending("steer", next.id)
                     }}
                     sessionID={route.sessionID}
+                    runningHint={<BackgroundToolHint messages={messages()} />}
                   />
                 </Match>
               </Switch>
@@ -1326,26 +1327,42 @@ function turnTokenToolSummary(tool: SessionMessageAssistantTool) {
 function BackgroundToolHint(props: { messages: SessionMessageInfo[] }) {
   const theme = useTheme()
   const shortcut = Keymap.useShortcut("session.background")
-  const visible = createMemo(() => {
+  const tool = createMemo(() => {
     const current = props.messages.findLast(
       (message): message is SessionMessageAssistant => message.type === "assistant" && !message.time.completed,
     )
-    return (
-      current?.content.some((part) => {
-        if (part.type !== "tool" || part.state.status !== "running") return false
-        const display = toolDisplay(part.name)
-        return display === "shell" || display === "subagent"
-      }) ?? false
-    )
+    return current?.content.find((part): part is SessionMessageAssistantTool => {
+      if (part.type !== "tool" || part.state.status !== "running") return false
+      const display = toolDisplay(part.name)
+      return display === "shell" || display === "subagent"
+    })
   })
+  const toolID = () => tool()?.id
+  const toolStartedAt = () => {
+    const current = tool()
+    if (!current) return
+    return current.time.ran ?? current.time.created
+  }
+  const [visible, setVisible] = createSignal(false)
+  createEffect(
+    on([toolID, toolStartedAt], ([id, startedAt]) => {
+      setVisible(false)
+      if (!id || startedAt === undefined) return
+      const remaining = Math.max(0, BACKGROUND_TOOL_HINT_DELAY - (Date.now() - startedAt))
+      if (remaining === 0) {
+        setVisible(true)
+        return
+      }
+      const timer = setTimeout(() => setVisible(true), remaining)
+      onCleanup(() => clearTimeout(timer))
+    }),
+  )
   return (
     <Show when={visible() && shortcut()}>
       {(value) => (
-        <box marginTop={1} paddingLeft={3} flexShrink={0}>
-          <text fg={theme.text.subdued}>
-            Press <span style={{ fg: theme.text.default }}>{value()}</span> to move running work to the background
-          </text>
-        </box>
+        <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
+          <span style={{ fg: theme.text.default }}>{value()}</span> background
+        </text>
       )}
     </Show>
   )
