@@ -198,10 +198,24 @@ export const fromWebSocket = (
     yield* waitOpen(ws, input)
     const messages = yield* Queue.bounded<string | Uint8Array, AIError | Cause.Done<void>>(128)
 
+    const offer = (message: string | Uint8Array) => {
+      if (Queue.offerUnsafe(messages, message)) return
+      Queue.failCauseUnsafe(
+        messages,
+        Cause.fail(
+          transportError("message", "WebSocket inbound queue overflow", {
+            url: input.url,
+            kind: "queue-overflow",
+            phase: "receive",
+          }),
+        ),
+      )
+    }
+
     const onMessage = (event: MessageEvent) => {
-      if (typeof event.data === "string") return Queue.offerUnsafe(messages, event.data)
+      if (typeof event.data === "string") return offer(event.data)
       const binary = binaryMessage(event.data)
-      if (binary) return Queue.offerUnsafe(messages, binary)
+      if (binary) return offer(binary)
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
@@ -249,15 +263,26 @@ export const fromWebSocket = (
 
     return {
       sendText: (message) =>
-        Effect.try({
-          try: () => ws.send(message),
-          catch: (error) =>
-            transportError("sendText", error instanceof Error ? error.message : "Failed to send WebSocket message", {
-              url: input.url,
-              kind: "write",
-              phase: "send",
-              delivery: "not-sent",
-            }),
+        Effect.suspend(() => {
+          if (ws.readyState !== globalThis.WebSocket.OPEN)
+            return Effect.fail(
+              transportError("sendText", `WebSocket is not open (state ${ws.readyState})`, {
+                url: input.url,
+                kind: "write",
+                phase: "send",
+                delivery: "not-sent",
+              }),
+            )
+          return Effect.try({
+            try: () => ws.send(message),
+            catch: (error) =>
+              transportError("sendText", error instanceof Error ? error.message : "Failed to send WebSocket message", {
+                url: input.url,
+                kind: "write",
+                phase: "send",
+                delivery: "not-sent",
+              }),
+          })
         }),
       messages: Stream.fromQueue(messages),
       close: cleanup.pipe(

@@ -10,12 +10,14 @@ import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
 import { App } from "../app"
 import { Model } from "../model"
+import { Provider } from "../provider"
 import { Permission } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
 import { QuestionTool } from "../tool/plugin/question"
 import { Tool } from "../tool"
 import { SessionContext } from "./context"
 import { SessionModelHeaders } from "./model-headers"
+import { SessionModelTransport } from "./model-transport"
 import { PromptCacheDiagnostics } from "./prompt-cache-diagnostics"
 import { MAX_STEPS_PROMPT } from "./runner/max-steps"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
@@ -201,7 +203,12 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const hooks = yield* PluginHooks.Service
+    const transport = yield* SessionModelTransport.Service
     const app = yield* App.Metadata
+    const webSocket = yield* Config.boolean("OPENCODE_EXPERIMENTAL_OPENAI_RESPONSES_WEBSOCKET").pipe(
+      Config.withDefault(false),
+      Effect.orDie,
+    )
     const diagnostics = yield* Config.boolean("OPENCODE_PROMPT_CACHE_DIAGNOSTICS").pipe(
       Config.withDefault(false),
       Effect.orDie,
@@ -274,7 +281,16 @@ export const layer = Layer.effect(
           }),
       })
       const http = composeHttpMiddleware(middlewares)
-      const options: StreamOptions = http ? { http } : {}
+      const webSocketEligible = middlewares.length === 0
+      const options: StreamOptions = {
+        ...(http ? { http } : {}),
+        ...(webSocket &&
+        webSocketEligible &&
+        resolved.ref.providerID === Provider.ID.openai &&
+        model.route.id === "openai-responses"
+          ? { webSocket: transport.bind(session.id) }
+          : {}),
+      }
       if (promptCacheSnapshots) {
         const current = PromptCacheDiagnostics.snapshot(request)
         const comparison = PromptCacheDiagnostics.compare(promptCacheSnapshots.get(session.id), current)
@@ -306,7 +322,7 @@ export const layer = Layer.effect(
       return {
         request,
         options,
-        webSocketEligible: middlewares.length === 0,
+        webSocketEligible,
         executeTool,
         stepLimitReached,
       }
@@ -319,5 +335,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, App.node],
+  deps: [PluginHooks.node, SessionModelTransport.node, App.node],
 })

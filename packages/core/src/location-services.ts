@@ -33,6 +33,7 @@ import { WebSearch } from "./websearch"
 import { ReferenceInstructions } from "./reference/instructions"
 import { SessionRunnerLLM } from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionModelTransport } from "./session/model-transport"
 import { SessionCompaction } from "./session/compaction"
 import { SessionTitle } from "./session/title"
 import { Skill } from "./skill"
@@ -90,6 +91,7 @@ const locationServiceNodes = [
   McpTool.node,
   SessionInstructions.node,
   SessionRunnerModel.node,
+  SessionModelTransport.node,
   SessionCompaction.node,
   SessionTitle.node,
   Snapshot.node,
