@@ -65,6 +65,53 @@ const appLocales = [
 ] as const
 const desktopLocales = appLocales
 const pluralCategories = new Set(["zero", "one", "two", "few", "many", "other"])
+const appFallbackKeys = new Set([
+  "dialog.provider.custom.label",
+  "dialog.model.unpaid.viewMoreProviders",
+  "session.header.reveal.finder",
+  "session.header.reveal.fileExplorer",
+  "session.header.reveal.containingFolder",
+  "command.session.export",
+  "command.session.export.description",
+  "context.export.session",
+  "toast.session.export.success.title",
+  "toast.session.export.success.description",
+  "toast.session.export.failed.title",
+  "toast.session.export.failed.description",
+  "common.export",
+  "settings.tab.preferences",
+  "settings.tab.notifications",
+  "settings.tab.projects",
+  "settings.tab.extensions",
+  "settings.preferences.description",
+  "settings.appearance.description",
+  "settings.notifications.description",
+  "settings.shortcuts.description",
+  "settings.servers.description",
+  "settings.projects.title",
+  "settings.projects.description",
+  "settings.projects.empty",
+  "settings.projects.server.all",
+  "settings.mcps.description",
+  "settings.extensions.description",
+  "settings.extensions.tab.mcps",
+  "settings.extensions.tab.skills",
+  "settings.extensions.availableAll",
+  "settings.extensions.manageConfig",
+  "settings.extensions.addSkills",
+  "settings.general.section.general",
+  "dialog.server.authenticate.title",
+  "project.settings.general.description",
+  "project.settings.scripts",
+  "project.settings.scripts.description",
+  "project.settings.extensions.description",
+  "project.settings.extensions.tab.lsps",
+  "project.settings.extensions.added",
+  "project.settings.extensions.shared",
+  "project.settings.extensions.lsp.detected",
+  "project.settings.extensions.lsp.description",
+  "project.settings.extensions.setupRequired",
+])
 
 const domains = [
   {
@@ -94,6 +141,9 @@ describe("i18n parity", () => {
       const families = new Set(pluralFamilies(source))
       for (const locale of domain.locales) {
         const target = await dictionary(domain.target(locale))
+        const missing = Object.keys(source).filter(
+          (key) => !Object.hasOwn(target, key) && (domain.name !== "app" || !appFallbackKeys.has(key)),
+        )
         const extra = Object.keys(target)
           .filter((key) => !Object.hasOwn(source, key) && !isPluralVariant(key, families))
           .sort()
