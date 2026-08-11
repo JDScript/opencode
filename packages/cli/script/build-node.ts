@@ -8,7 +8,6 @@ import path from "node:path"
 import { build } from "vite"
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
-import { modelsData } from "./generate"
 import { collectNodeAssets, copyNodeAssets, hashNodeAssets, seaAssetMap } from "./node-assets"
 import { mainConfig } from "../vite.node.config"
 import { nodeExecArgv, nodeTarget, type NodeTarget } from "../src/node/target"
@@ -61,7 +60,7 @@ for (const target of targets) {
   const assets = await collectNodeAssets(target)
   await rm("dist-node", { recursive: true, force: true })
   const assetHash = await hashNodeAssets(assets)
-  const input = { version: Script.version, channel: Script.channel, models: modelsData, assetHash, target }
+  const input = { version: Script.version, channel: Script.channel, assetHash, target }
   await copyNodeAssets(assets)
   await build(mainConfig(input))
 
