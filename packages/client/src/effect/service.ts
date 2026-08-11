@@ -1,9 +1,14 @@
 import { ServiceStatus } from "@opencode-ai/protocol/groups/health"
 import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
-import { spawn, type ChildProcess } from "node:child_process"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, EnsureOptions, StopOptions } from "../service.js"
+import {
+  contenderFailure,
+  contenderFinished,
+  type ServiceContender,
+  spawnServiceContender,
+} from "../service-contender.js"
 
 export * from "../service.js"
 /** Contents of the local service registration file. */
@@ -16,15 +21,6 @@ export type Info = import("../service.js").Info
 // 0600 permissions. That file is the complete discovery contract — reading it
 // is all a client needs to connect. The daemon's own configuration (port,
 // persisted password) is CLI-owned and never read here.
-
-type Contender = {
-  readonly child: ChildProcess
-  readonly error: () => Error | undefined
-  readonly closed: () => boolean
-  readonly stderr: () => string
-}
-
-const stderrLimit = 8 * 1024
 
 // Read-only lookup: registration file plus health check and version gate.
 // Never spawns; escalation to ensure() is the caller's policy.
@@ -56,7 +52,7 @@ const discoverLocal = Effect.fnUntraced(function* (options: DiscoverOptions) {
 // becomes discoverable. A contender is never killed merely for slow startup.
 /** Ensure a healthy, compatible local service is running. */
 export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOptions = {}) {
-  const contenders = new Set<Contender>()
+  const contenders = new Set<ServiceContender>()
   let timeouts: { readonly info: Info; readonly count: number } | undefined
   let announced = false
   let lastSpawn = 0
@@ -72,23 +68,7 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
     if (command === undefined) return yield* Effect.fail(new Error("Missing service command"))
     return yield* Effect.try({
       try: () => {
-        const child = spawn(command, args, { detached: true, stdio: ["ignore", "ignore", "pipe"] })
-        let error: Error | undefined
-        let closed = false
-        let stderr = Buffer.alloc(0)
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr = Buffer.concat([stderr, chunk]).subarray(-stderrLimit)
-        })
-        if (child.stderr !== null && "unref" in child.stderr && typeof child.stderr.unref === "function")
-          child.stderr.unref()
-        child.once("error", (cause) => {
-          error = new Error("Failed to start server", { cause })
-        })
-        child.once("close", () => {
-          closed = true
-        })
-        child.unref()
-        return { child, error: () => error, closed: () => closed, stderr: () => stderr.toString("utf8").trim() }
+        return spawnServiceContender(command, args)
       },
       catch: (cause) => new Error("Failed to start server", { cause }),
     })
@@ -146,24 +126,6 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
     return yield* Effect.fail(new Error("Timed out waiting for the background service to start"))
   return found.value.endpoint
 })
-
-function contenderFailure(contender: Contender) {
-  const error = contender.error()
-  if (error !== undefined) return error
-  if (contender.child.exitCode !== null && contender.child.exitCode !== 0)
-    return startupError(`Server process exited with code ${contender.child.exitCode}`, contender.stderr())
-  if (contender.child.signalCode !== null)
-    return startupError(`Server process terminated by ${contender.child.signalCode}`, contender.stderr())
-  return undefined
-}
-
-function contenderFinished(contender: Contender) {
-  return contender.error() !== undefined || contender.closed()
-}
-
-function startupError(message: string, stderr: string) {
-  return new Error(stderr ? `${message}\n${stderr}` : message)
-}
 
 /** Stop the registered local service. */
 export const stop = Effect.fn("service.stop")(function* (options: StopOptions = {}) {
