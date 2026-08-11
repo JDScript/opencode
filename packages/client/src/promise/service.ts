@@ -16,7 +16,11 @@ export * from "../service.js"
 type Contender = {
   readonly child: ChildProcess
   readonly error: () => Error | undefined
+  readonly closed: () => boolean
+  readonly stderr: () => string
 }
+
+const stderrLimit = 8 * 1024
 
 /** Discover a healthy, compatible local service without starting one. */
 export async function discover(options: DiscoverOptions = {}) {
@@ -48,13 +52,23 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
     const [command, ...args] = options.command ?? ["opencode", "serve", "--service"]
     if (command === undefined) throw new Error("Missing service command")
     try {
-      const child = spawn(command, args, { detached: true, stdio: "ignore" })
+      const child = spawn(command, args, { detached: true, stdio: ["ignore", "ignore", "pipe"] })
       let error: Error | undefined
+      let closed = false
+      let stderr = Buffer.alloc(0)
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr = Buffer.concat([stderr, chunk]).subarray(-stderrLimit)
+      })
+      if (child.stderr !== null && "unref" in child.stderr && typeof child.stderr.unref === "function")
+        child.stderr.unref()
       child.once("error", (cause) => {
         error = new Error("Failed to start server", { cause })
       })
+      child.once("close", () => {
+        closed = true
+      })
       child.unref()
-      return { child, error: () => error }
+      return { child, error: () => error, closed: () => closed, stderr: () => stderr.toString("utf8").trim() }
     } catch (cause) {
       throw new Error("Failed to start server", { cause })
     }
@@ -111,14 +125,18 @@ function contenderFailure(contender: Contender) {
   const error = contender.error()
   if (error !== undefined) return error
   if (contender.child.exitCode !== null && contender.child.exitCode !== 0)
-    return new Error(`Server process exited with code ${contender.child.exitCode}`)
+    return startupError(`Server process exited with code ${contender.child.exitCode}`, contender.stderr())
   if (contender.child.signalCode !== null)
-    return new Error(`Server process terminated by ${contender.child.signalCode}`)
+    return startupError(`Server process terminated by ${contender.child.signalCode}`, contender.stderr())
   return undefined
 }
 
 function contenderFinished(contender: Contender) {
-  return contender.error() !== undefined || contender.child.exitCode !== null || contender.child.signalCode !== null
+  return contender.error() !== undefined || contender.closed()
+}
+
+function startupError(message: string, stderr: string) {
+  return new Error(stderr ? `${message}\n${stderr}` : message)
 }
 
 /** Stop the registered local service. */
