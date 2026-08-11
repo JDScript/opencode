@@ -249,13 +249,14 @@ Recent work
     ])
   })
 
-  test("lowers directory attachments as directory context", () => {
+  test("exposes admitted reference directory source paths in model context", () => {
     const directory = FileAttachment.make({
       data: Base64.make(Buffer.from("lib/\nindex.ts").toString("base64")),
       mime: "application/x-directory",
-      source: { type: "uri", uri: "file:///project/src" },
-      name: "src/",
+      source: { type: "uri", uri: "file:///references/harness-engineering" },
+      name: "harness-engineering",
     })
+    expect(directory.source).toEqual({ type: "uri", uri: "file:///references/harness-engineering" })
     const messages = toLLMMessages(
       [
         SessionMessage.User.make({
@@ -277,8 +278,8 @@ Recent work
         { type: "text", text: "Review this directory" },
         {
           type: "text",
-          text: "\n\nAttached directory: src/\n\nlib/\nindex.ts",
-          metadata: { attachment: { source: directory.source, name: "src/" } },
+          text: "\n\nAttached directory: /references/harness-engineering\n\nlib/\nindex.ts",
+          metadata: { attachment: { source: directory.source, name: "harness-engineering" } },
         },
       ],
     })
@@ -314,7 +315,7 @@ Recent work
     expect(messages).toHaveLength(1)
     expect(messages[0]?.content.map((part) => (part.type === "text" ? part.text : part.type))).toEqual([
       "Review these attachments",
-      "\n\nAttached directory: src/\n\nindex.ts",
+      "\n\nAttached directory: /project/src\n\nindex.ts",
       "\n\nAttached file: main.ts\n\nexport const value = 1",
     ])
   })
@@ -341,7 +342,9 @@ Recent work
     )
 
     expect(messages).toHaveLength(1)
-    expect(messages[0]?.content).toMatchObject([{ type: "text", text: "\n\nAttached directory: src/\n\nindex.ts" }])
+    expect(messages[0]?.content).toMatchObject([
+      { type: "text", text: "\n\nAttached directory: /project/src\n\nindex.ts" },
+    ])
   })
 
   test("uses materialized image data as provider media and drops unsupported attachments", () => {
@@ -359,6 +362,64 @@ Recent work
               mime: "application/pdf",
               source: { type: "inline" },
               name: "document.pdf",
+            }),
+          ],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "Inspect this image" },
+      { type: "media", mediaType: "image/png", data, filename: "image.png" },
+    ])
+  })
+
+  test("exposes admitted local image source paths before provider media", () => {
+    const data = Base64.make("AAECAw==")
+    const image = FileAttachment.make({
+      data,
+      mime: "image/png",
+      source: { type: "uri", uri: "file:///project/IMG_3480.JPG" },
+      name: "IMG_3480.JPG",
+    })
+    expect(image.source).toEqual({ type: "uri", uri: "file:///project/IMG_3480.JPG" })
+
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-local-image-path"),
+          type: "user",
+          text: "Inspect this image",
+          files: [image],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "Inspect this image" },
+      { type: "text", text: "Attached file: /project/IMG_3480.JPG" },
+      { type: "media", mediaType: "image/png", data, filename: "IMG_3480.JPG" },
+    ])
+  })
+
+  test("does not add attachment location text for non-local provider media", () => {
+    const data = Base64.make("AAECAw==")
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-remote-image"),
+          type: "user",
+          text: "Inspect this image",
+          files: [
+            FileAttachment.make({
+              data,
+              mime: "image/png",
+              source: { type: "uri", uri: "https://example.com/image.png" },
+              name: "image.png",
             }),
           ],
           time: { created },
