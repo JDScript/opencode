@@ -651,7 +651,11 @@ export function Prompt(props: PromptProps) {
     },
   }
 
-  const stashKey = () => (config.experimental?.tab_drafts === true ? (props.sessionID ?? "home") : undefined)
+  // Captured once: the session route is keyed by sessionID, so this Prompt
+  // instance belongs to exactly one tab. Reading props.sessionID lazily would
+  // observe the *next* route during onCleanup and stash under the wrong tab.
+  const stashSessionID = props.sessionID
+  const stashKey = () => (config.experimental?.tab_drafts === true ? (stashSessionID ?? "home") : undefined)
 
   onMount(() => {
     const key = stashKey()

@@ -665,7 +665,9 @@ function App(props: { pair?: DialogPairCredentials }) {
             if (config.data.experimental?.tab_drafts !== true) return undefined
             const current = promptRef.current
             if (!current?.current.text) return undefined
-            const prompt = unwrap(current.current)
+            // Copy before reset: reset() merges an empty prompt into the same
+            // underlying store object that unwrap exposes.
+            const prompt = { ...unwrap(current.current) }
             current.reset()
             return prompt
           })()
