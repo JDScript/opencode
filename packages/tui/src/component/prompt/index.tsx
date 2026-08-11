@@ -130,7 +130,11 @@ function formatEditorContext(selection: EditorSelection) {
   return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
 }
 
+// One in-progress draft survives remounts. By default a single slot follows
+// focus across tabs; the tab_drafts experiment keys drafts to the tab (session
+// or home) they were written in.
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
+const stashedByTab = new Map<string, { prompt: PromptInfo; cursor: number }>()
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   const head = parseSlashHead(input, /\s/)
@@ -647,9 +651,13 @@ export function Prompt(props: PromptProps) {
     },
   }
 
+  const stashKey = () => (config.experimental?.tab_drafts === true ? (props.sessionID ?? "home") : undefined)
+
   onMount(() => {
-    const saved = stashed
-    stashed = undefined
+    const key = stashKey()
+    const saved = key === undefined ? stashed : stashedByTab.get(key)
+    if (key === undefined) stashed = undefined
+    else stashedByTab.delete(key)
     if (store.prompt.text) return
     if (saved && saved.prompt.text) {
       input.setText(saved.prompt.text)
@@ -662,7 +670,10 @@ export function Prompt(props: PromptProps) {
   onCleanup(() => {
     disposed = true
     if (store.prompt.text) {
-      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
+      const entry = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
+      const key = stashKey()
+      if (key === undefined) stashed = entry
+      else stashedByTab.set(key, entry)
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
