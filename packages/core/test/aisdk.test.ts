@@ -9,7 +9,7 @@ import { LLM, AIError, LLMEvent, Message, isContextOverflowFailure } from "@open
 import { LLMClient, RequestExecutor } from "@opencode-ai/ai/route"
 import { compileRequest } from "@opencode-ai/ai/route/client"
 import { expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AISDK.locationLayer)
@@ -49,7 +49,10 @@ const client = LLMClient.layer.pipe(
   Layer.provide(
     Layer.succeed(
       RequestExecutor.Service,
-      RequestExecutor.Service.of({ execute: () => Effect.die("Unexpected HTTP request") }),
+      RequestExecutor.Service.of({
+        execute: () => Effect.die("Unexpected HTTP request"),
+        stream: () => Stream.die("Unexpected HTTP request"),
+      }),
     ),
   ),
 )
@@ -542,7 +545,12 @@ it.effect("retries status-less AI SDK transport failures", () =>
         isRetryable: true,
       }),
     )
-    expect(error.reason).toMatchObject({ _tag: "Transport", kind: "AI_APICallError" })
+    expect(error.reason).toMatchObject({
+      _tag: "Transport",
+      transport: "http",
+      operation: "request",
+      code: "AI_APICallError",
+    })
     expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
     expect("http" in error.reason ? error.reason.http?.request.url : undefined).toBe("https://api.example.com/chat")
   }),

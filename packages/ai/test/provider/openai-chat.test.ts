@@ -22,7 +22,7 @@ import { ProviderShared } from "../../src/protocols/shared"
 import { Auth, LLMClient } from "../../src/route"
 import { compileRequest } from "../../src/route/client"
 import { it } from "../lib/effect"
-import { dynamicResponse, fixedResponse, truncatedStream } from "../lib/http"
+import { dynamicResponse, fixedResponse, systemError, truncatedStream } from "../lib/http"
 import { deltaChunk, usageChunk } from "../lib/openai-chunks"
 import { sseEvents } from "../lib/sse"
 
@@ -1221,12 +1221,20 @@ describe("OpenAI Chat route", () => {
 
   it.effect("surfaces transport errors that occur mid-stream", () =>
     Effect.gen(function* () {
-      const layer = truncatedStream([
-        `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`,
-      ])
+      const layer = truncatedStream(
+        [`data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`],
+        systemError("ECONNRESET", "socket closed unexpectedly"),
+      )
       const error = yield* LLMClient.generate(request).pipe(Effect.provide(layer), Effect.flip)
 
-      expect(error.message).toContain("Failed to read openai/openai-chat stream")
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        message: "ECONNRESET: socket closed unexpectedly",
+        transport: "http",
+        operation: "read",
+        code: "ECONNRESET",
+        url: "https://api.openai.test/v1/chat/completions",
+      })
     }),
   )
 

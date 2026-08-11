@@ -1,10 +1,10 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Stream } from "effect"
 import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, AIError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
-import { dynamicResponse } from "./lib/http"
+import { dynamicResponse, systemError } from "./lib/http"
 import { deltaChunk } from "./lib/openai-chunks"
 import { sseRaw } from "./lib/sse"
 import { it } from "./lib/effect"
@@ -67,6 +67,35 @@ const expectAIError = (error: unknown) => {
 const errorHttp = (error: AIError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("parses response body failures at the executor seam", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.stream(secretRequest).pipe(Stream.runDrain, Effect.flip)
+
+      expectAIError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        message: "ECONNRESET: disconnected <redacted> <redacted>",
+        transport: "http",
+        operation: "read",
+        code: "ECONNRESET",
+        url: "https://provider.test/v1/chat?api_key=%3Credacted%3E&debug=1",
+      })
+    }).pipe(
+      Effect.provide(
+        responsesLayer([
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(systemError("ECONNRESET", "disconnected query-secret-123 header-secret-456"))
+              },
+            }),
+          ),
+        ]),
+      ),
+    ),
+  )
+
   it.effect("preserves middleware error messages", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
