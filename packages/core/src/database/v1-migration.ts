@@ -159,6 +159,58 @@ type NextMessage = {
   readonly data: string
 }
 
+type SourceColumns<Row> = Readonly<Record<keyof Row, true | null>>
+
+const nextProjectColumns = {
+  id: true,
+  worktree: true,
+  vcs: null,
+  name: null,
+  icon_url: null,
+  icon_url_override: null,
+  icon_color: null,
+  time_created: true,
+  time_updated: true,
+  time_initialized: null,
+  sandboxes: true,
+  commands: null,
+} satisfies SourceColumns<NextProject>
+
+const nextSessionColumns = {
+  id: true,
+  project_id: true,
+  workspace_id: null,
+  parent_id: null,
+  fork_session_id: null,
+  fork_boundary: null,
+  slug: true,
+  directory: true,
+  path: null,
+  title: null,
+  version: true,
+  share_url: null,
+  summary_additions: null,
+  summary_deletions: null,
+  summary_files: null,
+  summary_diffs: null,
+  metadata: null,
+  cost: true,
+  tokens_input: true,
+  tokens_output: true,
+  tokens_reasoning: true,
+  tokens_cache_read: true,
+  tokens_cache_write: true,
+  revert: null,
+  permission: null,
+  agent: null,
+  model: null,
+  time_created: true,
+  time_updated: true,
+  time_compacting: null,
+  time_archived: null,
+  time_suspended: null,
+} satisfies SourceColumns<NextSession>
+
 const lock = Semaphore.makeUnsafe(1)
 const MIGRATION_STATE_KEY = "migration.v1-v2"
 const EVENT_DELETE_BATCH_SIZE = 1_000
@@ -678,12 +730,9 @@ function importNextDatabase(
         }),
       )
       const projects = new Map(
-        source
-          .query<NextProject, []>("SELECT * FROM project")
-          .all()
-          .map((project) => [project.id, project]),
+        selectSourceRows<NextProject>(source, "project", nextProjectColumns).map((project) => [project.id, project]),
       )
-      const sessions = source.query<NextSession, []>("SELECT * FROM session ORDER BY id DESC").all()
+      const sessions = selectSourceRows<NextSession>(source, "session", nextSessionColumns, "id")
       for (const [index, session] of sessions.entries()) {
         const project = projects.get(session.project_id)
         const projectID = project ? session.project_id : Project.ID.global
@@ -774,6 +823,33 @@ function isNextDatabase(source: SQLiteDatabase) {
       .map((table) => table.name),
   )
   return tables.has("project") && tables.has("session") && tables.has("session_message")
+}
+
+function selectSourceRows<Row>(
+  source: SQLiteDatabase,
+  table: "project" | "session",
+  columns: SourceColumns<Row>,
+  orderBy?: keyof Row,
+) {
+  const available = new Set(
+    source
+      .query<{ name: string }, []>(`PRAGMA table_info("${table}")`)
+      .all()
+      .map((column) => column.name),
+  )
+  const selection = Object.entries(columns)
+    .map(([name, required]) => {
+      if (available.has(name)) return `"${name}"`
+      if (!required) return `NULL AS "${name}"`
+      throw new Error(`Previous V2 database ${table} table is missing required column ${name}`)
+    })
+    .join(", ")
+  return source
+    .query<
+      Row,
+      []
+    >(`SELECT ${selection} FROM "${table}"${orderBy === undefined ? "" : ` ORDER BY "${String(orderBy)}" DESC`}`)
+    .all()
 }
 
 function row(

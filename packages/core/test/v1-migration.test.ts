@@ -945,6 +945,44 @@ describe("V1Migration database workflow", () => {
     )
   })
 
+  test("imports previous V2 sessions from an older source schema", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "opencode-next.db")
+    const sqlite = await import("bun:sqlite")
+    const source = new sqlite.Database(filename)
+    source.exec(await Bun.file(path.join(import.meta.dir, "fixture/v1-migration-old-next.sql")).text())
+    source.close()
+
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+
+        expect(yield* V1Migration.run({ nextDatabasePath: filename })).toEqual({ status: "completed" })
+        expect(
+          yield* db.get(
+            sql`SELECT fork_session_id, fork_boundary, time_suspended FROM session_v2 WHERE id = 'ses_old_next'`,
+          ),
+        ).toEqual({ fork_session_id: "ses_parent", fork_boundary: null, time_suspended: null })
+        expect(
+          yield* db.get(
+            sql`SELECT icon_url, icon_url_override, icon_color, commands FROM project WHERE id = 'old-project'`,
+          ),
+        ).toEqual({
+          icon_url: "https://example.test/icon.png",
+          icon_url_override: null,
+          icon_color: null,
+          commands: null,
+        })
+        expect(yield* db.all(sql`SELECT id, seq FROM session_message WHERE session_id = 'ses_old_next'`)).toEqual([
+          { id: "msg_old_next", seq: 0 },
+        ])
+        expect(yield* db.get(sql`SELECT seq FROM event_sequence WHERE aggregate_id = 'ses_old_next'`)).toEqual({
+          seq: 0,
+        })
+      }),
+    )
+  })
+
   test("derives required status from the durable cursor", async () => {
     await database(
       Effect.gen(function* () {
