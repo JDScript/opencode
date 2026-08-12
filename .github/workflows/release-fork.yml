@@ -1,0 +1,181 @@
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Publishes this fork's binaries to its own GitHub Releases. Upstream's publish.yml is left completely
+# untouched: all four of its jobs are guarded by `if: github.repository == 'anomalyco/opencode'`, so in
+# a fork it already does nothing. Nothing here runs script/publish.ts either — that script publishes to
+# npm/brew/AUR/ghcr and, more importantly, commits and force-pushes to `dev`, which would fight the
+# rebase workflow this fork depends on. Version comes from OPENCODE_VERSION instead, so releasing
+# creates no commits at all.
+#
+# Two invariants this file exists to protect, both of which silently break `opencode upgrade`:
+#
+#   1. The release must end up neither draft nor prerelease. `api.github.com/.../releases/latest` —
+#      which both installation/index.ts and the install script read — returns "the most recent
+#      non-prerelease, non-draft release". A release left in either state is invisible to every client.
+#   2. OPENCODE_CHANNEL must be `latest`. Anything else makes database.ts pick the filename
+#      `opencode-<channel>.db`, so the build starts against an empty database and every existing
+#      project and session disappears.
+#
+# The release is created as a draft and only published once all builds succeeded, so a failed build
+# cannot leave `/releases/latest` pointing at a release with missing assets.
+
+name: release-fork
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Upstream version to base this release on (blank = nearest upstream tag)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-fork
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      sha: ${{ steps.compute.outputs.sha }}
+      bun: ${{ steps.bun.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: the base version is derived from the nearest upstream tag.
+          fetch-depth: 0
+
+      - id: bun
+        # Read the bun version from package.json rather than pinning it here. packages/script
+        # validates the running bun against `packageManager` and throws on mismatch, so a hardcoded
+        # version here would break every build the day upstream bumps it.
+        run: echo "version=$(node -p "require('./package.json').packageManager.split('@')[1]")" >> "$GITHUB_OUTPUT"
+
+      - id: compute
+        run: |
+          set -euo pipefail
+
+          BASE='${{ inputs.base }}'
+          if [ -z "$BASE" ]; then
+            # Nearest upstream release tag reachable from HEAD. Works because the fork branch is kept
+            # rebased onto upstream/dev, so that tag is a genuine ancestor. Fork tags are excluded or
+            # each release would base itself on the previous one.
+            BASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*jdscript*' | sed 's/^v//')
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::Could not determine the upstream base version. Pass one via the 'base' input."
+            exit 1
+          fi
+
+          # Timestamp sorts lexicographically, which is what semver prerelease comparison does with
+          # alphanumeric identifiers; the sha makes the build traceable to exact source.
+          VERSION="${BASE}-jdscript.$(date -u +%Y%m%d%H%M)-$(git rev-parse --short=7 HEAD)"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (base $BASE)"
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Draft on purpose — see the header. Published by the `publish` job once builds pass.
+          gh release create '${{ steps.compute.outputs.tag }}' \
+            --draft \
+            --target '${{ steps.compute.outputs.sha }}' \
+            --title '${{ steps.compute.outputs.tag }}' \
+            --notes "Fork build of upstream opencode.
+
+          Base: \`${{ steps.compute.outputs.tag }}\`
+          Commit: \`${{ steps.compute.outputs.sha }}\`"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: darwin-arm64
+          - runner: ubuntu-latest
+            target: linux-x64
+          # GitHub-hosted ARM Linux runner. Free on public repositories only — drop this entry if the
+          # fork is private and a linux-arm64 binary is not needed.
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tag does not exist yet: a draft release only records its target commit. Check out that
+          # commit directly so every matrix job builds identical source.
+          ref: ${{ needs.version.outputs.sha }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ needs.version.outputs.bun }}
+
+      - run: bun install
+
+      - name: Build and upload ${{ matrix.target }}
+        working-directory: packages/opencode
+        env:
+          # Highest-priority version source in packages/script, so no package.json is rewritten and no
+          # release commit is produced.
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          # MUST be `latest` — see the header.
+          OPENCODE_CHANNEL: latest
+          # Makes build.ts archive the binaries and `gh release upload` them.
+          OPENCODE_RELEASE: "1"
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `--single` builds only the runner's own native target, and skips the baseline and musl
+        # variants. That is how the target list is limited to three without touching build.ts.
+        run: bun run ./script/build.ts --single
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Publish release
+        run: gh release edit "$TAG" --draft=false --latest --repo '${{ github.repository }}'
+
+      - name: Verify the release is actually reachable by opencode upgrade
+        run: |
+          set -euo pipefail
+
+          # Assert the two header invariants against the live API rather than trusting the flags above.
+          STATE=$(gh release view "$TAG" --repo '${{ github.repository }}' --json isDraft,isPrerelease,assets)
+          echo "$STATE"
+
+          if [ "$(jq -r '.isDraft' <<<"$STATE")" != "false" ]; then
+            echo "::error::Release is still a draft; /releases/latest will not return it."
+            exit 1
+          fi
+          if [ "$(jq -r '.isPrerelease' <<<"$STATE")" != "false" ]; then
+            echo "::error::Release is marked prerelease; /releases/latest will not return it."
+            exit 1
+          fi
+
+          COUNT=$(jq -r '[.assets[] | select(.name | test("^opencode-"))] | length' <<<"$STATE")
+          if [ "$COUNT" -lt 3 ]; then
+            echo "::error::Expected 3 binary assets, found $COUNT."
+            exit 1
+          fi
+
+          # What every client actually reads. If this does not match, upgrade will never see the build.
+          LATEST=$(gh api 'repos/${{ github.repository }}/releases/latest' --jq '.tag_name')
+          echo "releases/latest → $LATEST"
+          if [ "$LATEST" != "$TAG" ]; then
+            echo "::error::releases/latest is $LATEST, expected $TAG."
+            exit 1
+          fi
