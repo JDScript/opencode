@@ -12,6 +12,7 @@ import path from "path"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
+import { ForkRelease, isForkBuild } from "./fork" // FORK
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 import { InstallationEvent } from "@opencode-ai/schema/installation-event"
 
@@ -144,7 +145,9 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
 
     const upgradeCurl = Effect.fnUntraced(
       function* (target: string) {
-        const response = yield* httpOk.execute(HttpClientRequest.get("https://opencode.ai/install"))
+        // FORK: fetch this fork's install script, not upstream's — otherwise `opencode upgrade`
+        // reinstalls the official build over this one.
+        const response = yield* httpOk.execute(HttpClientRequest.get(ForkRelease.installScript))
         const body = yield* response.text
         const bodyBytes = new TextEncoder().encode(body)
         const shell = yield* upgradeScriptShell()
@@ -206,6 +209,23 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return "unknown" as Method
       }),
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        // FORK: a fork build compares itself only against fork releases.
+        //
+        // Without this, a leftover official install elsewhere on the machine (a global `opencode-ai`
+        // npm package, a brew formula) makes method() report that manager, latest() then returns the
+        // *upstream* version, and because upgrade.ts only checks string inequality it would happily
+        // "upgrade" this build into the official one — silently uninstalling the fork.
+        //
+        // Source runs report version "local", so isForkBuild() is false there and dev keeps upstream
+        // behaviour.
+        if (isForkBuild()) {
+          const forkResponse = yield* httpOk.execute(
+            HttpClientRequest.get(ForkRelease.latestReleaseApi).pipe(HttpClientRequest.acceptJson),
+          )
+          const forkRelease = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(forkResponse)
+          return forkRelease.tag_name.replace(/^v/, "")
+        }
+
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
@@ -255,9 +275,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         }
 
         const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/anomalyco/opencode/releases/latest").pipe(
-            HttpClientRequest.acceptJson,
-          ),
+          HttpClientRequest.get(ForkRelease.latestReleaseApi).pipe(HttpClientRequest.acceptJson), // FORK
         )
         const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
         return data.tag_name.replace(/^v/, "")
