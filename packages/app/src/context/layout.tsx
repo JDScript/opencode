@@ -513,6 +513,51 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       })
     })
 
+    // FORK: shared by the public `projects.open` below and by the seeding effect, so both normalise
+    // to the worktree root and load sessions the same way.
+    const openProject = (directory: string) => {
+      const root = rootFor(directory)
+      if (server.projects.list().find((x) => x.worktree === root)) return
+      void serverSync().project.loadSessions(root)
+      server.projects.open(root)
+    }
+
+    // FORK: seed the local sidebar list from the server's own project table.
+    //
+    // Upstream keeps that list purely local (localStorage `opencode.global.dat:server`), so every new
+    // browser starts empty and each device has to re-add the same folders by hand — even though the
+    // server already records every project ever opened in its `project` table and serves it from
+    // GET /project, which this app is *already* fetching (see `enrich` above). This effect closes the
+    // gap: the server is the discovery source; the local list stays authoritative for what is shown,
+    // ordered and closed.
+    //
+    // Two deliberate exclusions:
+    //  - Anything in `recentlyClosed`. `server.projects.open()` clears a directory from that list, so
+    //    seeding without this check would silently undo every close on the next render. Note the
+    //    stored history is capped at 16, so closing more projects than that lets the oldest reappear.
+    //  - The `id === "global"` pseudo-project. Every directory resolved outside a git repo collapses
+    //    into one row whose worktree is the filesystem root, holding unrelated sessions from many
+    //    directories. Auto-adding it would put a bare `/` entry in the sidebar; it can still be
+    //    opened by hand.
+    createEffect(() => {
+      if (!serverSync().ready) return
+      const discovered = serverSync().data.project
+      if (!discovered.length) return
+
+      const shown = new Set(server.projects.list().map((project) => pathKey(project.worktree)))
+      const closed = new Set(server.projects.recentlyClosed().map((worktree) => pathKey(worktree)))
+
+      for (const project of discovered) {
+        if (project.id === "global") continue
+        const worktree = project.worktree
+        if (!worktree) continue
+        const key = pathKey(worktree)
+        if (shown.has(key) || closed.has(key)) continue
+        shown.add(key)
+        openProject(worktree)
+      }
+    })
+
     const enriched = createMemo(() => server.projects.list().map(enrich))
     const list = createMemo(() => {
       const projects = enriched()
@@ -640,12 +685,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             .slice(0, RECENTLY_CLOSED_DISPLAY_LIMIT)
             .map((worktree) => enrich({ worktree, expanded: false }))
         }),
-        open(directory: string) {
-          const root = rootFor(directory)
-          if (server.projects.list().find((x) => x.worktree === root)) return
-          void serverSync().project.loadSessions(root)
-          server.projects.open(root)
-        },
+        open: openProject, // FORK: extracted above so the seeding effect reuses identical behaviour
         close(directory: string) {
           server.projects.close(directory)
         },
