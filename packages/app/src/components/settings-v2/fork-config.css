@@ -1,0 +1,301 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for fork-config.tsx. Kept out of settings-v2.css deliberately: that file is 15KB of actively
+ * maintained upstream CSS and appending to it would conflict on most rebases.
+ *
+ * Uses the same --v2-* tokens as settings-v2.css. Selectors key off the `fork-config-*` slot names
+ * rather than a component ancestor, because the tab header and the tab body are siblings — the header
+ * lives outside `[data-component="fork-config"]`.
+ */
+
+/*
+ * This tab fits the dialog instead of growing past it.
+ *
+ * `.settings-v2-panel` is a flex column with `height: 100%; overflow-y: auto`, so a tall body makes the
+ * whole panel scroll — which pushes the action buttons out of sight and produces a page scrollbar
+ * nested inside the reference list's own. Taking the remaining height with `flex: 1; min-height: 0` and
+ * clipping here means the panel never needs to scroll: the editor and the reference list scroll
+ * internally, and the action row stays pinned at the bottom of its column.
+ *
+ * `min-height: 0` is what allows a flex child to shrink below its content size; without it `flex: 1`
+ * still floors at the content height and the overflow comes back.
+ *
+ * `overflow-y: auto` rather than `hidden`: with the sizing above the content fits exactly and no
+ * scrollbar appears, but in a pathologically short window it degrades to a scrollbar instead of
+ * silently clipping the action buttons out of existence.
+ *
+ * Upstream's 36px section gap is meant for separate sections; this tab is one block.
+ */
+.settings-v2-tab-body[data-component="fork-config"] {
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- header: which server, which file ---------- */
+
+[data-slot="fork-config-target"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  min-width: 0;
+}
+
+[data-slot="fork-config-target-item"] {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-small);
+}
+
+[data-slot="fork-config-target-label"] {
+  flex: none;
+  color: var(--v2-text-text-faint);
+}
+
+[data-slot="fork-config-target-value"] {
+  font-family: var(--font-family-mono);
+  color: var(--v2-text-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- body ---------- */
+
+[data-slot="fork-config-description"] {
+  margin: 0;
+  /* Long measures are hard to read; the tab is much wider than comfortable prose. */
+  max-width: 72ch;
+  color: var(--v2-text-text-muted);
+  font-size: var(--font-size-small);
+  line-height: 1.5;
+}
+
+/*
+ * Editor gets most of the width — JSON does not wrap, so a narrow pane means constant horizontal
+ * scrolling. Reference pane has a floor so its type labels stay readable. Stacks below 900px.
+ */
+[data-slot="fork-config-body"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  /* Absorbs the height left over after the description, so both panes are as tall as the dialog allows. */
+  flex: 1;
+  min-height: 0;
+}
+
+@media (min-width: 900px) {
+  [data-slot="fork-config-body"] {
+    grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr);
+  }
+}
+
+[data-slot="fork-config-editor"],
+[data-slot="fork-config-reference"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * Below the two-column breakpoint the panes stack, and dividing one dialog height between them leaves
+ * both too short to use — so fall back to scrolling the tab body and give each pane a workable floor.
+ */
+@media (max-width: 899px) {
+  [data-slot="fork-config-body"] {
+    flex: none;
+  }
+
+  [data-slot="fork-config-editor"],
+  [data-slot="fork-config-reference"] {
+    min-height: 320px;
+  }
+}
+
+[data-component="fork-config"] textarea {
+  flex: 1;
+  /* Floor so a long error message cannot squeeze the editor to nothing, low enough that it does not
+     itself force the column past the dialog height. */
+  min-height: 120px;
+  width: 100%;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-base);
+  background-color: var(--v2-background-bg-base);
+  color: var(--v2-text-text-base);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-small);
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: auto;
+}
+
+[data-component="fork-config"] textarea:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--v2-border-border-focus);
+}
+
+[data-component="fork-config"] textarea[data-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--v2-state-fg-danger);
+}
+
+[data-component="fork-config"] textarea:disabled {
+  opacity: 0.6;
+}
+
+[data-slot="fork-config-actions"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+[data-slot="fork-config-status"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-small);
+  color: var(--v2-text-text-faint);
+}
+
+[data-slot="fork-config-status"][data-state="error"] {
+  color: var(--v2-state-fg-danger);
+}
+
+[data-slot="fork-config-problems"] {
+  flex: none;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background-color: var(--v2-background-bg-layer-02);
+  box-shadow: inset 0 0 0 0.5px var(--v2-state-fg-danger);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-slot="fork-config-problems-title"] {
+  font-size: var(--font-size-small);
+  color: var(--v2-state-fg-danger);
+}
+
+[data-slot="fork-config-problems"] pre {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-small);
+  line-height: 1.5;
+  color: var(--v2-text-text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Bounded so a long list of schema issues cannot crowd out the editor above it. */
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* ---------- reference pane ---------- */
+
+[data-slot="fork-config-reference-header"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+[data-slot="fork-config-reference-title"] {
+  font-size: var(--font-size-small);
+  color: var(--v2-text-text-base);
+}
+
+[data-slot="fork-config-reference-count"] {
+  font-size: var(--font-size-small);
+  color: var(--v2-text-text-faint);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+[data-slot="fork-config-reference-list"] {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-muted);
+  padding: 4px;
+}
+
+[data-slot="fork-config-reference-item"] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: start;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+[data-slot="fork-config-reference-item"]:hover {
+  background-color: var(--v2-background-bg-layer-02);
+}
+
+[data-slot="fork-config-reference-item"]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--v2-border-border-focus);
+}
+
+[data-slot="fork-config-reference-row"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+[data-slot="fork-config-reference-key"] {
+  flex: 0 1 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-small);
+  color: var(--v2-text-text-base);
+  white-space: nowrap;
+}
+
+/* Ellipsised on one line; the full type is in the title attribute. */
+[data-slot="fork-config-reference-type"] {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--v2-text-text-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-slot="fork-config-reference-doc"] {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--v2-text-text-faint);
+  /* Descriptions run to a couple of sentences; clamp so rows stay scannable. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+[data-slot="fork-config-reference-empty"] {
+  padding: 12px 8px;
+  font-size: var(--font-size-small);
+  color: var(--v2-text-text-faint);
+}
