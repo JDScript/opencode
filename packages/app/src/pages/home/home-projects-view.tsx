@@ -14,6 +14,9 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { getProjectAvatarVariant, type HomeProjectSelection, type LocalProject } from "@/context/layout"
 import { ServerConnection } from "@/context/server"
 import { useLanguage } from "@/context/language"
+// FORK
+import { useForkUsageDialog } from "@/components/fork-usage/use-usage-dialog"
+import { ForkUsageIcon } from "@/components/fork-usage/usage-icon"
 import { usePlatform } from "@/context/platform"
 import { displayName, getProjectAvatarSource } from "@/pages/layout/helpers"
 import { ServerRowMenuView, serverMenuLabels } from "@/components/server/server-row-menu"
@@ -160,8 +163,22 @@ export function HomeUtilityNav(props: {
   onOpenHelp: () => void
   language: ReturnType<typeof useLanguage>
 }) {
+  // FORK: opens the dialog from here rather than taking an `onOpenUsage` prop, which would mean editing
+  // the controller that renders this and every call site along the way. This is the fork's only seam in
+  // the Home page, and it stays one file wide.
+  const openUsage = useForkUsageDialog()
+
   return (
     <div class={`${props.class ?? ""} min-w-0 flex-col gap-1 pr-3`}>
+      {/* FORK: usage dashboard, above settings and help. */}
+      <HomeProjectNavButton
+        type="button"
+        class="text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted"
+        onClick={openUsage}
+      >
+        <ForkUsageIcon />
+        <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("fork.usage.title")}</span>
+      </HomeProjectNavButton>
       <HomeProjectNavButton
         type="button"
         class="text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted"
