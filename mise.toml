@@ -1,0 +1,7 @@
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Pins the toolchain this repo requires. `bun` must match `packageManager` in package.json:
+# packages/script/src/index.ts validates the running bun version against it and throws on mismatch,
+# so bumping one without the other breaks every build script.
+[tools]
+bun = "1.3.14"
