@@ -1,8 +1,8 @@
 # Fork notes
 
-A fork of [anomalyco/opencode](https://github.com/anomalyco/opencode) that adds a real config editor to
-the web UI and makes the sidebar's project list discover itself from the server, published to this
-repository's own GitHub Releases.
+A fork of [anomalyco/opencode](https://github.com/anomalyco/opencode) that adds a real config editor and a
+token-and-cost dashboard to the web UI, and makes the sidebar's project list discover itself from the
+server, published to this repository's own GitHub Releases.
 
 The design goal that shapes every decision here: **stay rebasable onto upstream forever.** Upstream
 moves fast. So the rule is _new files plus the smallest possible seams_ — almost all logic lives in
@@ -13,10 +13,11 @@ carries a `FORK` comment and is listed below.
 
 ## 1. What changed, functionally
 
-|                                    | Before                                                                       | After                                                                                                                       |
-| ---------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Config editing from the web UI** | Two keys only (`shell`, `disabled_providers`)                                | Whole global config file, with server-authoritative validation and a field reference generated from the server's own schema |
-| **Sidebar project list**           | Purely local to each browser — every device re-adds the same folders by hand | Auto-seeded from the server's `project` table; local list still owns show/hide/order                                        |
+|                                    | Before                                                                       | After                                                                                                                                    |
+| ---------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Config editing from the web UI** | Two keys only (`shell`, `disabled_providers`)                                | Whole global config file, with server-authoritative validation and a field reference generated from the server's own schema              |
+| **Sidebar project list**           | Purely local to each browser — every device re-adds the same folders by hand | Auto-seeded from the server's `project` table; local list still owns show/hide/order                                                     |
+| **Usage visibility**               | Context-window fill for the current session only, read off its last message  | A dashboard over the whole history: cost, requests and all five token classes, by time, session, project, model, agent or reasoning tier |
 
 Deliberately **not** done, and why:
 
@@ -131,21 +132,52 @@ Match the comment prefix, not the bare word: upstream's `patches/install-korean-
 header (`mise.toml`, `.github/workflows/release-fork.yml`) — those are **not** seams, they do not exist
 upstream and cannot conflict.
 
-| File                                                             | Seam                                                                       |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkConfigApi` on `OpenCodeHttpApi`                                |
-| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkConfigApiRoutes` layer, added to `createRoutes`                       |
-| `packages/opencode/src/config/config.ts`                         | `export` on `globalConfigFile()`                                           |
-| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()` |
-| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                   |
-| `packages/app/src/context/language.tsx`                          | Merges the fork i18n dictionaries                                          |
-| `packages/app/src/context/layout.tsx`                            | `openProject` extraction + the project-seeding effect                      |
-| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | Config-file tab trigger and content                                        |
-| `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `leadingControl` / `trailingControl` slots on the prompt action row        |
-| `packages/app/src/components/prompt-input-v2.tsx`                | Fills both slots (working scanner, context usage) and exposes `sessionId`  |
+| File                                                             | Seam                                                                               |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkConfigApi` and `ForkUsageApi` on `OpenCodeHttpApi`                     |
+| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkConfigApiRoutes` and `forkUsageApiRoutes` layers, in `createRoutes`           |
+| `packages/opencode/src/config/config.ts`                         | `export` on `globalConfigFile()`                                                   |
+| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`         |
+| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                           |
+| `packages/app/src/context/language.tsx`                          | Merges the fork i18n dictionaries                                                  |
+| `packages/app/src/context/layout.tsx`                            | `openProject` extraction + the project-seeding effect                              |
+| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | Config-file tab trigger and content                                                |
+| `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `leadingControl` / `trailingControl` slots on the prompt action row                |
+| `packages/app/src/components/prompt-input-v2.tsx`                | Fills both slots (scanner, context usage), exposes `sessionId`, registers `/usage` |
+| `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                          |
 
 ### Non-obvious choices worth keeping
 
+- **The usage endpoint takes a bucket _duration_ and an alignment _origin_, never a calendar unit.** So the
+  server holds no timezone knowledge: grouping is `(ts - originMs) / bucketMs`. The client computes
+  `originMs` with the browser's tzdata, which SQLite does not have — `date(ts, 'unixepoch', 'Asia/Shanghai')`
+  returns NULL, so the only server-side alternative is a fixed offset that misplaces spend across DST. It
+  also lets the day boundary move off midnight, which matters here: 75% of this history's spend fell in the
+  00:00, 01:00, 02:00 and 03:00 hours local, so a calendar day splits one night's work across two columns.
+- **Usage reads both message tables and normalizes them.** v1 writes `message`, durable v2 sessions write
+  `session_message`, and neither is authoritative alone — on this installation `session_message` is empty and
+  every message is in `message`. `UNION ALL` is correct either way with no flag detection, since a session
+  lives in exactly one. Three shape differences would each silently yield nulls if crossed: `role` is inside
+  the JSON in v1 but a column in v2, the model is flat in v1 and nested in v2, and v2's `Model.Ref` names it
+  `id`, not `modelID`.
+- **Usage aggregates per message, not from the `step-finish` parts that maintain the session totals.** Both
+  reconcile exactly — $204.0577 three ways on real data — but only messages carry the model, agent and
+  variant. Grouping by session also returns `parentSessionID` so the client can roll sub-agent spend up or
+  leave it flat; sub-sessions held 31% of all spend, so both readings are needed and the endpoint takes no
+  position.
+- **The charts are hand-rolled SVG.** Their two requirements are free in SVG and costly on canvas:
+  `stroke="var(--syntax-info)"` follows all 37 themes and the live theme preview with no JavaScript, and CSS
+  handles animation. The only charting library already in the lockfile (chart.js, via the Zen console) is
+  canvas, and cannot draw a calendar heatmap without a plugin that is not in the lockfile — so the heatmap
+  would be hand-written regardless, leaving two rendering styles side by side.
+- **`/usage` registers from `prompt-input-v2.tsx`, not from `pages/session.tsx`.** Upstream registers its own
+  commands there, but `useCommand().register` is a runtime API needing no central list — and that file is
+  already a seam and is mounted for every session's composer, so the session entry point costs no extra
+  upstream file. `CommandOption.slash` is the whole integration: `prompt-input-v2.tsx` builds its slash menu
+  by filtering registered commands for that field.
+- **The usage button's icon is hand-drawn.** The v2 set has no chart, graph or statistics icon among its 37,
+  and `Icon` silently falls back to `plus` for an unknown name (`icon.tsx:190`) — so a guessed name would
+  render a plus sign with no error anywhere.
 - **`ForkConfigApi` is mounted standalone, not added to `RootHttpApi`.** Adding a group to `RootHttpApi`
   changes its requirement set, which breaks `test/server/httpapi-global.test.ts` and
   `test/server/httpapi-control-plane.test.ts` — both build `HttpApiBuilder.layer(RootHttpApi)` with a
@@ -280,6 +312,27 @@ cd packages/app      && bun dev -- --port 4444    # open this one
   `RECENTLY_CLOSED_HISTORY_LIMIT = 16`, and the seeding effect uses it as the "don't re-add" set.
 - **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public
   repos; drop that matrix entry otherwise.
+- **Usage covers this fork's own database only.** It reports what opencode recorded, so it will never agree
+  with a provider's dashboard or with what another client (Claude Code and the like) spent on the same
+  account.
+- **A free model reporting `cost: 0` is indistinguishable from no cost.** The figures are what the provider
+  reported per message; a model with no pricing data contributes zero and its tokens still count.
+- **Global usage does not aggregate across servers.** The dashboard queries one server at a time, chosen from
+  the picker. Session titles and project names come back correctly for any server — the endpoint sends the
+  worktree path — but a session on a non-active server falls back to a short id, because titles live only in
+  the active server's sync store.
+- **Usage does not refresh itself.** There is a `session.usage.updated` SSE event carrying `{cost, tokens}`
+  (`context/global-sync/event-reducer.ts`), so live totals are possible without polling; it is not wired up,
+  and reopening the dialog refetches.
+- **A global range query cannot use an index.** v1 `message`'s only time index leads with `session_id`, so an
+  unfiltered range is a scan plus a `json_extract` per row — 9ms across 1105 rows, so roughly a second at a
+  hundred thousand. The session-scoped view does hit that index. Adding an expression index would mean
+  editing upstream's migration list, which is not worth it yet.
+- **The server's day bucket is a fixed 86400000, which is not a local day across a DST change** — so the client
+  never asks for one. It requests hours, which are the same length in every zone, and folds them into local days
+  itself with the browser's calendar. Reading the server's day buckets directly was wrong in two ways at once:
+  every day on the far side of a transition missed its lookup and vanished from the calendar, and a bar labelled
+  from the raw bucket read as the day before. `alignBuckets` covers both, with tests across both 2026 transitions.
 - **The old settings UI is not touched.** The config tab is only in `settings-v2`, shown when
   `settings.general.newLayoutDesigns` is on. Upstream sunsets the v1 layout on 2026-09-14
   (`context/settings.tsx`), so v1 was not worth wiring up.
