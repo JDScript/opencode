@@ -85,24 +85,56 @@ jobs:
           # alphanumeric identifiers; the sha makes the build traceable to exact source.
           VERSION="${BASE}-jdscript.$(date -u +%Y%m%d%H%M)-$(git rev-parse --short=7 HEAD)"
 
+          # The upstream commit this build sits on. `jdscript` is a linear series of fork patches on top
+          # of an upstream commit, so its merge-base with upstream's dev IS that commit.
+          #
+          # Recorded because the version's upstream component does not identify the upstream tree:
+          # upstream lands many commits without bumping it (15 in a single day, all still 1.18.16), so
+          # two releases can both say 1.18.16 while sitting on trees that differ by a fortnight of work.
+          #
+          # Fetched from upstream directly, NOT from this repo's `dev` mirror. Using the mirror looks
+          # equivalent and is not: if `dev` was fast-forwarded locally but not pushed, the merge-base is
+          # the mirror's stale tip and this silently records the wrong base — the exact failure this
+          # field exists to prevent. Against real upstream it is correct by construction.
+          UPSTREAM=unknown
+          if git fetch --no-tags --quiet https://github.com/anomalyco/opencode.git dev 2>/dev/null; then
+            UPSTREAM=$(git merge-base HEAD FETCH_HEAD 2>/dev/null || echo unknown)
+          fi
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Releasing v$VERSION (base $BASE)"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (base $BASE, upstream $UPSTREAM)"
 
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          # Both coordinates, because neither alone identifies the build: the upstream version is
+          # ambiguous (see the compute step), and the fork commit stops being an ancestor of `jdscript`
+          # the next time that branch is rebased. Creating this release also creates its tag, which is an
+          # independent ref — no rebase or force-push can move it, and GitHub never collects a tagged
+          # commit. That tag, not the branch, is what makes a release traceable forever.
+          #
+          # printf rather than a heredoc so the notes cannot inherit this file's YAML indentation.
+          notes=$(printf '%s\n' \
+            "Fork build of upstream opencode." \
+            "" \
+            "- Upstream version: \`${{ steps.compute.outputs.base }}\`" \
+            "- Upstream commit: \`${{ steps.compute.outputs.upstream }}\`" \
+            "- Fork commit: \`${{ steps.compute.outputs.sha }}\`" \
+            "" \
+            "Exact source for this build: \`git checkout ${{ steps.compute.outputs.tag }}\`")
+
           # Draft on purpose — see the header. Published by the `publish` job once builds pass.
           gh release create '${{ steps.compute.outputs.tag }}' \
             --draft \
             --target '${{ steps.compute.outputs.sha }}' \
             --title '${{ steps.compute.outputs.tag }}' \
-            --notes "Fork build of upstream opencode.
-
-          Base: \`${{ steps.compute.outputs.tag }}\`
-          Commit: \`${{ steps.compute.outputs.sha }}\`"
+            --notes "$notes"
 
   build:
     needs: version
