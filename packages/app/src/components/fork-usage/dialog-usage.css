@@ -1,0 +1,287 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for dialog-usage.tsx, on the same `--v2-*` tokens the settings dialog uses so this belongs in the
+ * same window rather than looking like a guest in it.
+ */
+
+/*
+ * The dialog is 980x600 at `x-large`, and the cards, chart, breakdowns, tree and calendar together need more
+ * vertical room, so the body scrolls internally rather than the dialog growing.
+ *
+ * `dialog-body` is already a `flex: 1` column with `overflow: hidden`; the one thing it lacks is
+ * `min-height: 0`, which is what allows a flex child to shrink below its content size. Without it `flex: 1`
+ * floors at the content height and the scroll container below never gets a bounded height to scroll in.
+ */
+.fork-usage-dialog [data-slot="dialog-body"] {
+  min-height: 0;
+}
+
+[data-component="fork-usage"] {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  /*
+   * The first version had 4px here, which read as a rendering bug rather than a tight layout. 24px is the
+   * dialog's own rhythm, symmetric now that no scrollbar needs clearing on the right, and deeper at the bottom
+   * so the last section does not sit flush against the edge when scrolled to the end.
+   */
+  padding: 4px 24px 24px;
+  /*
+   * Hidden, the same way dialog-v2.css and tabs-v2.css hide theirs — a dialog with four nested scroll
+   * containers shows four scrollbars, and the page ends up framed by chrome instead of by its own content.
+   * What signals "there is more" here is the layout: the lists cut a row in half at their boundary.
+   */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+[data-component="fork-usage"]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-slot="fork-usage-header-actions"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/*
+ * One ranked figure and four supporting ones, rather than five boxes of equal weight.
+ *
+ * Money is why anyone opens this; requests, tokens and hit rate are the context that explains it. A grid of
+ * equal cards claimed they mattered equally and left the eye nowhere to land. Borderless, too — five framed
+ * panels above five more framed panels turns the top of the page into a lattice.
+ */
+[data-slot="fork-usage-summary"] {
+  display: flex;
+  align-items: baseline;
+  gap: 12px 28px;
+  flex-wrap: wrap;
+  padding: 2px 0 2px 2px;
+}
+
+[data-slot="fork-usage-summary-lead"] {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+}
+
+[data-slot="fork-usage-summary-figure"] {
+  color: var(--v2-text-text-base);
+  font-size: 27px;
+  font-variant-numeric: tabular-nums;
+  /* Large figures set at default tracking look loose; pulling them in makes the number read as one object. */
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+[data-slot="fork-usage-summary-caption"] {
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+}
+
+[data-slot="fork-usage-summary-rest"] {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 0;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-summary-item"] {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-summary-item"] dt {
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+[data-slot="fork-usage-summary-item"] dd {
+  margin: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Divides the calendar from the session tree folded beneath it, inside one section. */
+[data-slot="fork-usage-rule"] {
+  margin: 2px 0 0;
+  border: none;
+  border-top: 1px solid var(--v2-border-border-muted);
+}
+
+[data-slot="fork-usage-section"] {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 10px;
+  background: var(--v2-background-bg-layer-01);
+}
+
+[data-slot="fork-usage-section-head"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 24px;
+}
+
+[data-slot="fork-usage-heading"] {
+  margin: 0;
+  flex: none;
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+[data-slot="fork-usage-hint"] {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The metric picker and the breakdown tabs sit at the far end of their own heading row. */
+[data-slot="fork-usage-section-head"] > :last-child:not([data-slot="fork-usage-heading"]) {
+  margin-left: auto;
+}
+
+/*
+ * Projects and the model/agent/tier breakdown side by side: they answer "where" and "with what", and reading
+ * them together is the point. Stacks below 720px, where two columns would leave the labels truncated.
+ */
+[data-slot="fork-usage-columns"] {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (min-width: 720px) {
+  [data-slot="fork-usage-columns"] {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+[data-slot="fork-usage-error"],
+[data-slot="fork-usage-warning"],
+[data-slot="fork-usage-notice"] {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+[data-slot="fork-usage-error"] {
+  color: var(--syntax-critical);
+}
+
+[data-slot="fork-usage-warning"] {
+  color: var(--syntax-warning);
+}
+
+/*
+ * "This server has no usage endpoint" is a state, not a fault — pointing the app at an official build is a
+ * normal thing to do — so it reads as information rather than as something broken.
+ */
+[data-slot="fork-usage-notice"] {
+  color: var(--v2-text-text-muted);
+}
+
+/*
+ * Disclosure for the session tree in the global view.
+ *
+ * Folded because it is the longest thing on the page and the least often needed: the calendar above answers
+ * "when", and the tree answers "which run" only once a day looks worth opening. The session view has no
+ * disclosure — there the tree is the subject.
+ */
+[data-slot="fork-usage-disclosure"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--v2-text-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+[data-slot="fork-usage-disclosure"]:hover {
+  color: var(--v2-text-text-base);
+}
+
+[data-slot="fork-usage-disclosure"]:focus-visible {
+  outline: 1px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/*
+ * `chevron-down` points down, so collapsed rotates it to point at the row it would open.
+ *
+ * Sized and centred rather than left inline: an inline SVG sits on the text baseline, which puts it a pixel or
+ * two below the middle of the label beside it.
+ */
+[data-slot="fork-usage-disclosure-caret"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--v2-icon-icon-muted);
+  transform: rotate(-90deg);
+  transition: transform 140ms ease-out;
+}
+
+[data-slot="fork-usage-disclosure"][aria-expanded="true"] [data-slot="fork-usage-disclosure-caret"] {
+  transform: rotate(0deg);
+}
+
+[data-slot="fork-usage-disclosure-count"] {
+  margin-left: auto;
+  flex: none;
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The cache share is part of the input figure, so it trails it rather than standing as its own statistic. */
+[data-slot="fork-usage-summary-note"] {
+  margin-left: 5px;
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+}
+
+/* Scoped to a session there is only the model panel, which should fill the row rather than sit half-width. */
+[data-slot="fork-usage-columns"][data-single] {
+  grid-template-columns: 1fr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="fork-usage-disclosure-caret"] {
+    transition: none;
+  }
+}
