@@ -88,6 +88,8 @@ import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
+import { forkUsageHandlers } from "./handlers/fork-usage" // FORK
+import { ForkUsageApi } from "./groups/fork-usage" // FORK
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -146,6 +148,13 @@ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+)
+// FORK: standalone so RootHttpApi's requirement set stays untouched. `Database.Service` comes from the
+// app-level LayerNode group, so usage aggregation needs no workspace routing or instance context — it
+// reads the whole database. Needs auth only.
+const forkUsageApiRoutes = HttpApiBuilder.layer(ForkUsageApi).pipe(
+  Layer.provide(forkUsageHandlers),
+  Layer.provide(httpApiAuthLayer),
 )
 const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
   Layer.provide(ptyConnectHandlers),
@@ -276,6 +285,7 @@ export function createRoutes(
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
+    forkUsageApiRoutes, // FORK
     ptyConnectApiRoutes,
     instanceRoutes,
     serverRoutes,
