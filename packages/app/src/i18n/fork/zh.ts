@@ -9,6 +9,8 @@ type EnDict = (typeof import("./en"))["dict"]
 export const dict = {
   "fork.settings.tab.configFile": "配置文件",
 
+  "fork.prompt.working": "正在工作",
+
   "fork.config.section.title": "全局配置",
   "fork.config.section.description":
     "编辑所选服务器的全局配置文件。大部分改动立即生效；服务器监听参数（port、hostname、cors、mdns）需要手动重启服务器。",
