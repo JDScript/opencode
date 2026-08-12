@@ -139,8 +139,13 @@ Version format:
 └ upstream base   └ UTC stamp     └ commit
 ```
 
-- The base is derived automatically from the nearest upstream tag reachable from `HEAD` (correct as long
-  as `jdscript` stays rebased onto `dev`), or passed in explicitly.
+- The base is read from `packages/opencode/package.json`, or passed in explicitly via the `base` input.
+  **Not from `git describe`** — upstream's release tags are not ancestors of `dev`, because
+  `script/publish.ts` commits and tags on a detached commit and pushes only a separate "sync release
+  versions" commit to `dev`. `git describe` therefore cannot see `v1.18.16` and walks back to whatever
+  ancient tag happens to be reachable; the first run of this workflow derived `1.4.11` that way. That
+  same sync commit is what writes the released version into every `package.json`, which makes that file
+  upstream's own record of the branch's release.
 - The stamp sorts lexicographically, which is how semver compares alphanumeric prerelease identifiers,
   so versions order by release time. The sha makes any build traceable to exact source.
 - **A stamp is required, not optional.** `cli/upgrade.ts` compares versions with plain string equality
