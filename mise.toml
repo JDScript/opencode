@@ -5,3 +5,7 @@
 # so bumping one without the other breaks every build script.
 [tools]
 bun = "1.3.14"
+# Releases are triggered with `gh workflow run release-fork.yml`, and the workflow's own steps shell out
+# to gh inside the runner (where it is preinstalled). Pinned here so triggering a release does not
+# depend on whatever gh happens to be on PATH.
+gh = "latest"
