@@ -136,7 +136,10 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Co
 
 export const use = serviceUse(Service)
 
-function globalConfigFile() {
+// FORK: exported so the fork's raw-config endpoints resolve the exact same file this service reads.
+// Duplicating the candidate list instead would let the editor silently write a different file than
+// the server loads if upstream ever reorders it.
+export function globalConfigFile() {
   const candidates = ["opencode.jsonc", "opencode.json", "config.json"].map((file) =>
     path.join(Global.Path.config, file),
   )
