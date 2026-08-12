@@ -1,0 +1,401 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for panels.tsx.
+ */
+
+/*
+ * Both lists scroll inside their card rather than growing it.
+ *
+ * A row is about 50px, so a machine with twenty projects or a dozen models would otherwise push the sections
+ * below it off the page and leave the dialog's own scrollbar to travel past a wall of bars. The caps are set
+ * to leave a row cut in half at the boundary, which is the affordance that says there is more.
+ *
+ * Scroll chaining is left on deliberately. Containing it sounds tidier, but with the scrollbars hidden there
+ * is nothing to explain why the page stopped moving when a list reached its end — so reaching the end of a
+ * list carries on scrolling the page, which is what a wheel gesture over a small inner list is usually for.
+ */
+[data-component="fork-usage-bars"],
+[data-component="fork-usage-tree"] {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+[data-component="fork-usage-bars"]::-webkit-scrollbar,
+[data-component="fork-usage-tree"]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-component="fork-usage-bars"] {
+  max-height: 268px;
+}
+
+/*
+ * Taller, because the tree's rows are the point once it is open and its indentation needs the vertical room to
+ * read as a hierarchy. Still bounded: forty sessions with their sub-agents is a very long list.
+ */
+[data-component="fork-usage-tree"] {
+  max-height: 340px;
+}
+
+/* Keeps focus outlines from being clipped at the scroll container's edge. */
+[data-component="fork-usage-bars"],
+[data-component="fork-usage-tree"] {
+  padding-right: 2px;
+}
+
+[data-slot="fork-usage-empty"] {
+  margin: 0;
+  padding: 12px 0;
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+}
+
+/* Ranked bars */
+
+[data-slot="fork-usage-bar-row"] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-bar-head"] {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-bar-label"] {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-slot="fork-usage-bar-value"] {
+  margin-left: auto;
+  flex: none;
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The four supporting figures under a bar, wrapping rather than truncating.
+ *
+ * Value before label in each pair — the numbers are what gets compared down the column, so they line up on
+ * the left of their own pair and the label trails as the unit.
+ */
+[data-slot="fork-usage-bar-note"] {
+  display: flex;
+  gap: 3px 12px;
+  flex-wrap: wrap;
+  margin: 0;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-fact"] {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-fact"] dd {
+  margin: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-slot="fork-usage-fact"] dt {
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+[data-slot="fork-usage-bar-track"],
+[data-slot="fork-usage-tree-track"] {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--v2-background-bg-layer-03);
+  overflow: hidden;
+}
+
+[data-slot="fork-usage-bar-fill"] {
+  background: var(--v2-icon-icon-base);
+}
+
+[data-slot="fork-usage-bar-fill"],
+[data-slot="fork-usage-tree-fill"] {
+  height: 100%;
+  border-radius: 2px;
+  /* Grows into place on open, and eases between ranges rather than snapping. */
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Session tree */
+
+[data-component="fork-usage-tree"] {
+  gap: 7px;
+}
+
+[data-slot="fork-usage-tree-row"] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/*
+ * Indentation is the whole point of this view, so it is expressed as padding on the row rather than on the
+ * label — the bar indents with its label, which is what makes the nesting readable as a shape.
+ */
+[data-slot="fork-usage-tree-row"][data-depth="1"] {
+  padding-left: 16px;
+}
+
+[data-slot="fork-usage-tree-row"][data-depth="2"] {
+  padding-left: 32px;
+}
+
+/* Projects are the headline rows; sessions read as detail under them. */
+[data-slot="fork-usage-tree-row"][data-kind="project"] {
+  margin-top: 6px;
+}
+
+[data-slot="fork-usage-tree-row"][data-kind="project"]:first-child {
+  margin-top: 0;
+}
+
+/*
+ * `center`, not `baseline`. Baseline aligns the caret's glyph box against the text baseline, which sits it a
+ * pixel or two low next to a 12px label — the misalignment reads as sloppiness rather than as a choice.
+ */
+[data-slot="fork-usage-tree-head"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+[data-slot="fork-usage-tree-head"][data-interactive] {
+  cursor: pointer;
+}
+
+[data-slot="fork-usage-tree-head"][data-interactive]:hover [data-slot="fork-usage-tree-caret"] {
+  color: var(--v2-icon-icon-base);
+}
+
+[data-slot="fork-usage-tree-head"]:focus-visible {
+  outline: 1px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+[data-slot="fork-usage-tree-label"] {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-kind="project"] [data-slot="fork-usage-tree-label"] {
+  color: var(--v2-text-text-base);
+  font-weight: 500;
+}
+
+[data-kind="session"] [data-slot="fork-usage-tree-label"] {
+  color: var(--v2-text-text-base);
+}
+
+[data-kind="child"] [data-slot="fork-usage-tree-label"] {
+  color: var(--v2-text-text-muted);
+}
+
+/*
+ * The caret is decoration now that the whole head is the control. The spacer opposite it is exactly its width,
+ * which keeps the labels of childless rows on the same left edge as the ones with a caret.
+ */
+[data-slot="fork-usage-tree-caret"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--v2-icon-icon-muted);
+  transform: rotate(-90deg);
+  transition: transform 140ms ease-out;
+}
+
+[aria-expanded="true"] > [data-slot="fork-usage-tree-caret"] {
+  transform: rotate(0deg);
+}
+
+[data-slot="fork-usage-tree-spacer"] {
+  flex: none;
+  width: 14px;
+}
+
+[data-slot="fork-usage-tree-agent"] {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--v2-background-bg-layer-03);
+  color: var(--v2-text-text-faint);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+[data-slot="fork-usage-tree-requests"] {
+  margin-left: auto;
+  flex: none;
+  color: var(--v2-text-text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-slot="fork-usage-tree-value"] {
+  flex: none;
+  min-width: 62px;
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/*
+ * Depth carries through the bar's weight as well as its indent, so the hierarchy survives when the rows are
+ * scanned rather than read. One hue throughout — this is a single measure, not a categorical breakdown.
+ */
+[data-kind="project"] [data-slot="fork-usage-tree-fill"] {
+  background: var(--v2-icon-icon-base);
+}
+
+[data-kind="session"] [data-slot="fork-usage-tree-fill"] {
+  background: var(--v2-icon-icon-muted);
+}
+
+[data-kind="child"] [data-slot="fork-usage-tree-fill"] {
+  background: var(--v2-icon-icon-muted);
+  opacity: 0.55;
+}
+
+[data-kind="project"] [data-slot="fork-usage-tree-track"] {
+  height: 6px;
+}
+
+[data-kind="child"] [data-slot="fork-usage-tree-track"] {
+  height: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="fork-usage-bar-fill"],
+  [data-slot="fork-usage-tree-fill"],
+  [data-slot="fork-usage-tree-caret"] {
+    transition: none;
+  }
+}
+
+/*
+ * The readout table.
+ *
+ * Six columns: the series, then the measures. Every figure column is right-aligned and tabular so the values
+ * form vertical runs that can be compared straight down the model list — the reason a table beats a line of
+ * figures here. `table-layout: fixed` keeps the columns from resizing as the numbers change under the pointer,
+ * which is what would otherwise make inspecting a chart feel unsteady.
+ */
+[data-component="fork-usage-readout"] {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+[data-component="fork-usage-readout"] th,
+[data-component="fork-usage-readout"] td {
+  padding: 1px 0 1px 8px;
+  font-weight: 400;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The name column takes what is left; the figure columns are sized to their widest plausible value. */
+[data-component="fork-usage-readout"] th:first-child,
+[data-component="fork-usage-readout"] td:first-child {
+  width: auto;
+  padding-left: 0;
+  text-align: left;
+}
+
+[data-component="fork-usage-readout"] th:not(:first-child),
+[data-component="fork-usage-readout"] td:not(:first-child) {
+  width: 68px;
+}
+
+[data-component="fork-usage-readout"] thead th {
+  color: var(--v2-text-text-base);
+}
+
+/* Units sit under the totals rather than above them: the numbers are what the eye lands on first. */
+[data-slot="fork-usage-readout-units"] td {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--v2-border-border-muted);
+  color: var(--v2-text-text-faint);
+}
+
+[data-slot="fork-usage-readout-caption"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-component="fork-usage-readout"] tbody td {
+  color: var(--v2-text-text-muted);
+}
+
+[data-component="fork-usage-readout"] tbody tr:first-child td {
+  padding-top: 4px;
+}
+
+/* A series with nothing in the inspected column stays in place, dimmed, so the rows never reflow. */
+[data-component="fork-usage-readout"] tbody tr[data-idle] {
+  opacity: 0.4;
+}
+
+[data-slot="fork-usage-readout-name"] {
+  min-width: 0;
+}
+
+[data-slot="fork-usage-readout-name"] > span {
+  vertical-align: middle;
+}
+
+[data-slot="fork-usage-readout-label"] {
+  display: inline-block;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

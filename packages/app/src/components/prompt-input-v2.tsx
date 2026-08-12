@@ -11,6 +11,7 @@ import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 // FORK
 import { ForkSessionScanner } from "@/components/fork-session-scanner"
+import { useForkUsageCommand } from "@/components/fork-usage/use-usage-dialog"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
@@ -53,6 +54,13 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const dialog = useDialog()
   const command = useCommand()
   const language = useLanguage()
+
+  // FORK: registers `/usage` and its command-palette entry. Done from here rather than from
+  // pages/session.tsx — where upstream's own commands are registered — because `useCommand().register` is a
+  // runtime API needing no central list, and this file is already a fork seam that is mounted for the
+  // lifetime of every session's composer. That keeps the session entry point from costing another
+  // upstream file. The id is passed as a getter so the dialog opens scoped to whichever session is current.
+  useForkUsageCommand(() => props.controller.sessionId)
 
   return (
     <div class="flex flex-col gap-3">

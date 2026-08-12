@@ -19,7 +19,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { serverName } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
-import { configFieldDocs, createForkApi } from "@/utils/fork-api"
+import { configFieldDocs, createForkApi, isForkUnsupported } from "@/utils/fork-api"
 import "./fork-config.css"
 
 /** Long enough that typing a key does not fire a request per character. */
@@ -45,8 +45,22 @@ export const SettingsForkConfigV2: Component = () => {
 
   let editor: HTMLTextAreaElement | undefined
 
-  const content = () => draft() ?? file()?.content ?? ""
-  const dirty = () => draft() !== undefined && draft() !== (file()?.content ?? "")
+  /**
+   * The resource, or nothing when it failed.
+   *
+   * Reading `file()` in an error state re-throws, which would take the whole settings dialog down through
+   * the nearest error boundary — and pointing the app at a server without the fork's routes is a normal
+   * thing to do, not a crash. `loadFailure` below reports it in place instead.
+   */
+  const loaded = () => (file.error === undefined ? file() : undefined)
+
+  const loadFailure = createMemo(() => {
+    if (file.error === undefined) return undefined
+    return isForkUnsupported(file.error) ? "unsupported" : "error"
+  })
+
+  const content = () => draft() ?? loaded()?.content ?? ""
+  const dirty = () => draft() !== undefined && draft() !== (loaded()?.content ?? "")
 
   // Debounced authoritative validation. Runs on load too, so an already-broken config announces
   // itself instead of waiting for the next save attempt.
@@ -54,6 +68,9 @@ export const SettingsForkConfigV2: Component = () => {
     const value = content()
     const client = api()
     if (file.loading) return
+    // Nothing loaded, so there is nothing to validate — and validating would just fail the same way and
+    // report a second, less useful message on top of the first.
+    if (file.error !== undefined) return
 
     setChecking(true)
     const handle = window.setTimeout(() => {
@@ -148,11 +165,11 @@ export const SettingsForkConfigV2: Component = () => {
             <span data-slot="fork-config-target-label">{language.t("fork.config.server.label")}</span>
             <span data-slot="fork-config-target-value">{serverName(serverSdk().server)}</span>
           </span>
-          <Show when={file()}>
-            {(loaded) => (
+          <Show when={loaded()}>
+            {(current) => (
               <span data-slot="fork-config-target-item">
                 <span data-slot="fork-config-target-label">{language.t("fork.config.file.label")}</span>
-                <code data-slot="fork-config-target-value">{loaded().path}</code>
+                <code data-slot="fork-config-target-value">{current().path}</code>
               </span>
             )}
           </Show>
@@ -161,6 +178,19 @@ export const SettingsForkConfigV2: Component = () => {
 
       <div class="settings-v2-tab-body" data-component="fork-config">
         <p data-slot="fork-config-description">{language.t("fork.config.section.description")}</p>
+
+        <Show when={loadFailure()}>
+          {(failure) => (
+            <div
+              data-slot={failure() === "unsupported" ? "fork-config-notice" : "fork-config-problems"}
+              role={failure() === "unsupported" ? "status" : "alert"}
+            >
+              {failure() === "unsupported"
+                ? language.t("fork.config.error.unsupported", { server: serverName(serverSdk().server) })
+                : language.t("fork.config.error.load")}
+            </div>
+          )}
+        </Show>
 
         <div data-slot="fork-config-body">
           <div data-slot="fork-config-editor">

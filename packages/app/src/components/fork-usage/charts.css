@@ -1,0 +1,238 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for charts.tsx.
+ *
+ * One hue throughout, with strength standing in for category: the page shows a single measure — money —
+ * split various ways, and a rainbow would imply the parts were unrelated things. It also needs only one token,
+ * so it cannot drift across the 37 themes the way four hand-picked hues would.
+ */
+
+[data-component="fork-usage-chart"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-plot"] {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+[data-slot="fork-usage-chart-empty"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 96px;
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+}
+
+[data-slot="fork-usage-gridline"] {
+  stroke: var(--v2-border-border-muted);
+  stroke-width: 1;
+  /* Halves the weight of the grid without needing a second token for it. */
+  opacity: 0.5;
+}
+
+[data-slot="fork-usage-axis-y"],
+[data-slot="fork-usage-axis-y2"],
+[data-slot="fork-usage-axis-x"] {
+  fill: var(--v2-text-text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-slot="fork-usage-axis-y"] {
+  text-anchor: end;
+  dominant-baseline: middle;
+}
+
+/* Cost on the right, so the two scales cannot be mistaken for one. */
+[data-slot="fork-usage-axis-y2"] {
+  text-anchor: start;
+  dominant-baseline: middle;
+}
+
+[data-slot="fork-usage-axis-x"] {
+  text-anchor: middle;
+}
+
+/*
+ * Requests read as the reference measure and cost as the subject, so requests take the quieter token. Both
+ * come from one hue: two bars in two unrelated colours would imply two unrelated things, and they are the
+ * same period seen twice.
+ */
+[data-slot="fork-usage-bar-requests"] {
+  fill: var(--v2-icon-icon-muted);
+  opacity: 0.42;
+}
+
+[data-slot="fork-usage-bar-cost"] {
+  fill: var(--v2-icon-icon-base);
+}
+
+[data-hovered] [data-slot="fork-usage-bar-requests"] {
+  opacity: 0.7;
+}
+
+[data-slot="fork-usage-hit"] {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+/* The hovered column's bars lift out of the rest while the readout describes them. */
+[data-slot="fork-usage-bar-requests"],
+[data-slot="fork-usage-bar-cost"] {
+  transition: opacity 120ms ease-out;
+}
+
+/* Carries a stack's ramp: opacity is set inline, the hue comes from here. */
+[data-slot="fork-usage-swatch"] {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--v2-icon-icon-base);
+}
+
+/* Calendar heatmap */
+
+[data-component="fork-usage-heatmap"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/*
+ * Normal reading order, weekday labels on the left.
+ *
+ * The first version reversed the row to keep the newest week in view when 53 fixed columns overflowed, which
+ * put the weekday labels on the right and read as a mistake. The grid now sizes itself to the data and to the
+ * card, so it fits; `overflow-x` stays only as a fallback for a year of history in a narrow window.
+ */
+[data-slot="fork-usage-heatmap-body"] {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+[data-slot="fork-usage-heatmap-body"]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-slot="fork-usage-heatmap-weekdays"] {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--fork-usage-cell-gap, 3px);
+  color: var(--v2-text-text-faint);
+  font-size: 9px;
+  /* Matches the cell rhythm so each initial sits on its own row of squares. */
+  line-height: var(--fork-usage-cell, 9px);
+}
+
+[data-slot="fork-usage-heatmap-weekdays"] > span {
+  height: var(--fork-usage-cell, 9px);
+}
+
+[data-slot="fork-usage-heatmap-grid"] {
+  display: flex;
+  flex: 1;
+  gap: var(--fork-usage-cell-gap, 3px);
+  min-width: 0;
+}
+
+[data-slot="fork-usage-heatmap-week"] {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--fork-usage-cell-gap, 3px);
+}
+
+[data-slot="fork-usage-heatmap-cell"] {
+  width: var(--fork-usage-cell, 9px);
+  height: var(--fork-usage-cell, 9px);
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: var(--v2-icon-icon-base);
+  cursor: default;
+  transition: opacity 120ms ease-out;
+}
+
+/* Same ramp as the cost stack above, so a dense day and a tall bar read as the same kind of statement. */
+[data-slot="fork-usage-heatmap-cell"][data-level="0"] {
+  background: var(--v2-background-bg-layer-03);
+  opacity: 1;
+}
+
+[data-slot="fork-usage-heatmap-cell"][data-level="1"] {
+  opacity: 0.3;
+}
+
+[data-slot="fork-usage-heatmap-cell"][data-level="2"] {
+  opacity: 0.5;
+}
+
+[data-slot="fork-usage-heatmap-cell"][data-level="3"] {
+  opacity: 0.75;
+}
+
+[data-slot="fork-usage-heatmap-cell"][data-level="4"] {
+  opacity: 1;
+}
+
+/* Days outside the range: present so the grid stays rectangular, but not a real zero. */
+[data-slot="fork-usage-heatmap-cell"][data-level="out"] {
+  background: transparent;
+  opacity: 1;
+}
+
+[data-slot="fork-usage-heatmap-cell"]:focus-visible {
+  outline: 1px solid var(--v2-border-border-focus);
+  outline-offset: 1px;
+}
+
+[data-slot="fork-usage-heatmap-footer"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+[data-slot="fork-usage-heatmap-readout"] {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-slot="fork-usage-muted"] {
+  color: var(--v2-text-text-faint);
+}
+
+/* Legend squares keep a fixed size: they are a key, not part of the grid's rhythm. */
+[data-slot="fork-usage-heatmap-legend"] {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  --fork-usage-cell: 9px;
+  --fork-usage-cell-gap: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="fork-usage-heatmap-cell"] {
+    transition: none;
+  }
+}
