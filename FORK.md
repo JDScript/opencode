@@ -42,49 +42,107 @@ Deliberately **not** done, and why:
 
 ```
 upstream/dev  ──►  dev        pure mirror, fast-forward only, never edited
-                    └──►  jdscript   this fork's work; rebased onto dev; releases tagged here
+                    └──►  jdscript   this fork's trunk; rebased onto dev; releases are cut from here
+                            └──►  feature branches, cut from jdscript and merged back into it
 ```
 
 - `dev` exists only to track upstream. Never commit to it — that keeps it incapable of conflicting.
-- `jdscript` is the working branch and the fork's default branch.
+- `jdscript` is the fork's default branch and is treated as its **production** branch: anything
+  non-trivial is developed on a branch cut from it, not committed to it directly.
 - `git rerere` is enabled, so a conflict resolved once is replayed automatically on later rebases.
 - `upstream`'s push URL is deliberately set to `DISABLED_DO_NOT_PUSH_TO_UPSTREAM`.
+
+### Pushing `jdscript` triggers nothing — but releasing builds what GitHub has
+
+No workflow fires on a push to this branch. Every upstream workflow is either limited to
+`dev` / `production` / `beta` / `ci`, or triggered by a `github-v*` / `vscode-v*` **tag** (never created
+here), or `workflow_dispatch`-only — including `release-fork.yml`. So `jdscript` can be force-pushed
+after a rebase without side effects.
+
+The catch runs the other way: `release-fork.yml`'s build job checks out `git rev-parse HEAD` **of the
+dispatched ref on GitHub**, not anything local. A rebase that has not been pushed means a release would
+build the pre-rebase code. **Push before releasing.**
 
 ### Rebasing onto a new upstream release
 
 ```sh
 git fetch upstream dev --tags
+
+# Pin the pre-rebase state before rewriting it. A tag is permanent and costs nothing, and it makes the
+# force-push reversible without the reflog — which is local-only and expires after 90 days. Release tags
+# already pin every *released* state; this covers the unreleased ones.
+archive="fork/pre-rebase/$(date -u +%Y%m%d%H%M)-onto-$(git rev-parse --short upstream/dev)"
+git tag "$archive" jdscript && git push origin "$archive"
+
 git switch dev && git merge --ff-only upstream/dev   # cannot conflict; refuses if it would
 git switch jdscript && git rebase dev
+
+# Push the mirror too, so GitHub's compare views and the fork's own record of "which upstream point are
+# we on" stay honest. The release workflow deliberately does not depend on this — it asks upstream
+# directly — precisely because a stale mirror is easy to leave behind.
+git push origin dev
 ```
 
 Then work through section 3 and re-run the checks in section 5. If a hunk fails to apply, find the
 matching row below — it says what the seam is for, which is usually enough to place it by hand.
 
+Prune old `fork/pre-rebase/*` tags whenever they get noisy — they are pure insurance, and any state that
+was actually shipped is pinned by its release tag instead.
+
+### Tracing a past release across rebases
+
+Rebasing rewrites `jdscript`, so a released commit stops being an ancestor of the branch. **The source is
+not lost:** `gh release create --target <sha>` creates a tag at that commit, tags are independent refs
+that no rebase or force-push can move, and GitHub never garbage-collects a tagged commit. Verified: the
+first release's tag still resolves to its exact pre-rebase commit.
+
+What that leaves working, and the one thing it does not:
+
+| Question                            | Command                                                                           |
+| ----------------------------------- | --------------------------------------------------------------------------------- |
+| What source built version X?        | `git checkout v<version>`                                                         |
+| What differs between two releases?  | `git diff v<a> v<b>`                                                              |
+| How did _our patch series_ change?  | `git range-diff <baseA>..v<a> <baseB>..v<b>`                                      |
+| Which upstream tree was X on?       | its release notes — upstream version **and** commit                               |
+| ~~Commit log between two releases~~ | **broken**: `git log v<a>..v<b>` spans two rewritten histories and is meaningless |
+
+`git range-diff` is the replacement for that last row and it is exact: run across the first rebase it
+reported all eleven fork patches as `=`, unchanged, with the old→new sha mapping.
+
+The release notes carry the upstream version **and** the upstream commit because the version alone does
+not identify the upstream tree — upstream lands many commits without bumping it (15 in one day, all still
+`1.18.16`).
+
 ---
 
 ## 3. Upstream touch points
 
-This is the entire rebase cost: **8 files, +113 / −22 lines**, most of which are explanatory comments.
+This table is the rebase checklist: **every upstream file this fork edits, and what for.** It records
+_what_ changed, not how many lines — line counts churn on every commit and go stale faster than they help.
+
 List every seam with:
 
 ```sh
-git grep -nE '(//|#) FORK' -- ':!FORK.md'    # 20 lines across the 8 files below
+git grep -nE '(//|#) FORK' -- ':!FORK.md'
 ```
 
-(Match the comment prefix, not the bare word — upstream's `patches/install-korean-ime-fix.sh` uses
-`FORK_REPO` for something unrelated.)
+Match the comment prefix, not the bare word: upstream's `patches/install-korean-ime-fix.sh` uses
+`FORK_REPO` for something unrelated. That command also matches the fork-only files that carry a `FORK`
+header (`mise.toml`, `.github/workflows/release-fork.yml`) — those are **not** seams, they do not exist
+upstream and cannot conflict.
 
-| File                                                             | Lines  | Seam                                                                       |
-| ---------------------------------------------------------------- | ------ | -------------------------------------------------------------------------- |
-| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | +2     | Mounts `ForkConfigApi` on `OpenCodeHttpApi`                                |
-| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | +9     | `forkConfigApiRoutes` layer, added to `createRoutes`                       |
-| `packages/opencode/src/config/config.ts`                         | +4 −1  | `export` on `globalConfigFile()`                                           |
-| `packages/opencode/src/installation/index.ts`                    | +22 −4 | Fork release/install URLs, plus the fork-build short circuit in `latest()` |
-| `install`                                                        | +12 −7 | `GITHUB_REPO` variable replacing hardcoded download URLs                   |
-| `packages/app/src/context/language.tsx`                          | +8 −4  | Merges the fork i18n dictionaries                                          |
-| `packages/app/src/context/layout.tsx`                            | +46 −6 | `openProject` extraction + the project-seeding effect                      |
-| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | +10    | Config-file tab trigger and content                                        |
+| File                                                             | Seam                                                                       |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkConfigApi` on `OpenCodeHttpApi`                                |
+| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkConfigApiRoutes` layer, added to `createRoutes`                       |
+| `packages/opencode/src/config/config.ts`                         | `export` on `globalConfigFile()`                                           |
+| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()` |
+| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                   |
+| `packages/app/src/context/language.tsx`                          | Merges the fork i18n dictionaries                                          |
+| `packages/app/src/context/layout.tsx`                            | `openProject` extraction + the project-seeding effect                      |
+| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | Config-file tab trigger and content                                        |
+| `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `leadingControl` / `trailingControl` slots on the prompt action row        |
+| `packages/app/src/components/prompt-input-v2.tsx`                | Fills both slots (working scanner, context usage) and exposes `sessionId`  |
 
 ### Non-obvious choices worth keeping
 
@@ -119,10 +177,11 @@ git grep -nE '(//|#) FORK' -- ':!FORK.md'    # 20 lines across the 8 files below
 
 Nothing enforces these; they are the only places one value lives twice.
 
-| Value       | Locations                                                                                                                      |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| GitHub repo | `REPO` in `packages/opencode/src/installation/fork.ts` · `GITHUB_REPO` in `install` (a shell script cannot import TS)          |
-| bun version | `packageManager` in `package.json` · `mise.toml`. The release workflow reads it from `package.json`, so that one cannot drift. |
+| Value            | Locations                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Fork GitHub repo | `REPO` in `packages/opencode/src/installation/fork.ts` · `GITHUB_REPO` in `install` (a shell script cannot import TS)            |
+| bun version      | `packageManager` in `package.json` · `mise.toml`. The release workflow reads it from `package.json`, so that one cannot drift.   |
+| Upstream repo    | the `git remote` named `upstream` · the URL in `release-fork.yml`'s upstream-base lookup (a workflow cannot read a local remote) |
 
 ---
 
