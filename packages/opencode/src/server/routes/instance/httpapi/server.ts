@@ -88,6 +88,8 @@ import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
+import { forkConfigHandlers } from "./handlers/fork-config" // FORK
+import { ForkConfigApi } from "./groups/fork-config" // FORK
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -146,6 +148,12 @@ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+)
+// FORK: standalone so RootHttpApi's requirement set stays untouched. Needs auth only — the global
+// config file is not directory-scoped, so no workspace routing or instance context.
+const forkConfigApiRoutes = HttpApiBuilder.layer(ForkConfigApi).pipe(
+  Layer.provide(forkConfigHandlers),
+  Layer.provide(httpApiAuthLayer),
 )
 const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
   Layer.provide(ptyConnectHandlers),
@@ -276,6 +284,7 @@ export function createRoutes(
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
+    forkConfigApiRoutes, // FORK
     ptyConnectApiRoutes,
     instanceRoutes,
     serverRoutes,
