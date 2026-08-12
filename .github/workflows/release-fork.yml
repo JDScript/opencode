@@ -62,15 +62,24 @@ jobs:
 
           BASE='${{ inputs.base }}'
           if [ -z "$BASE" ]; then
-            # Nearest upstream release tag reachable from HEAD. Works because the fork branch is kept
-            # rebased onto upstream/dev, so that tag is a genuine ancestor. Fork tags are excluded or
-            # each release would base itself on the previous one.
-            BASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*jdscript*' | sed 's/^v//')
+            # Read the base from packages/opencode/package.json, not from `git describe`.
+            #
+            # Upstream's release tags are NOT ancestors of dev: script/publish.ts commits and tags on a
+            # detached commit, then pushes a separate "sync release versions" commit to dev. So
+            # `git describe` cannot see v1.18.16 and walks back to whatever ancient tag happens to be
+            # reachable — the first run of this workflow derived 1.4.11 that way.
+            #
+            # That same sync commit is what writes the released version into every package.json, so this
+            # file on dev is upstream's own record of which release the branch corresponds to.
+            BASE=$(node -p "require('./packages/opencode/package.json').version")
           fi
-          if [ -z "$BASE" ]; then
-            echo "::error::Could not determine the upstream base version. Pass one via the 'base' input."
-            exit 1
-          fi
+          case "$BASE" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::Base version '$BASE' is not a semver release. Pass one via the 'base' input."
+              exit 1
+              ;;
+          esac
 
           # Timestamp sorts lexicographically, which is what semver prerelease comparison does with
           # alphanumeric identifiers; the sha makes the build traceable to exact source.
@@ -123,7 +132,7 @@ jobs:
 
       - run: bun install
 
-      - name: Build and upload ${{ matrix.target }}
+      - name: Build ${{ matrix.target }}
         working-directory: packages/opencode
         env:
           # Highest-priority version source in packages/script, so no package.json is rewritten and no
@@ -131,13 +140,50 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           # MUST be `latest` — see the header.
           OPENCODE_CHANNEL: latest
-          # Makes build.ts archive the binaries and `gh release upload` them.
-          OPENCODE_RELEASE: "1"
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          #
+          # OPENCODE_RELEASE is deliberately NOT set. It is the only thing gating build.ts's archive and
+          # upload block (script/build.ts:235), and that block cannot work with `--single`:
+          #
+          #   gh release upload ./dist/*.zip ./dist/*.tar.gz
+          #
+          # A single-target build produces one archive, so one of those globs matches nothing — and
+          # bun's shell fails on an unmatched glob rather than passing it through. Upstream never hits
+          # this because it always builds all twelve targets, so both extensions always exist.
+          #
+          # Archiving and uploading therefore happen in the next step instead, which keeps build.ts —
+          # upstream's own release script — untouched. `Script.release` gates nothing else, so the
+          # binary produced here is identical.
         # `--single` builds only the runner's own native target, and skips the baseline and musl
         # variants. That is how the target list is limited to three without touching build.ts.
         run: bun run ./script/build.ts --single
+
+      - name: Archive and upload ${{ matrix.target }}
+        working-directory: packages/opencode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Same layout and names build.ts would produce, because the install script derives the
+          # download filename from them: opencode-<os>-<arch>.tar.gz on linux, .zip elsewhere.
+          for dir in dist/*/; do
+            name=$(basename "$dir")
+            case "$name" in
+              *linux*) (cd "dist/$name/bin" && tar -czf "../../$name.tar.gz" *) ;;
+              *) (cd "dist/$name/bin" && zip -qr "../../$name.zip" *) ;;
+            esac
+          done
+
+          # nullglob so the extension this target did not produce expands to nothing instead of being
+          # passed through as a literal path — the exact failure this step exists to avoid.
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::No archives were produced for ${{ matrix.target }}."
+            exit 1
+          fi
+          printf 'uploading %s\n' "${assets[@]}"
+          gh release upload '${{ needs.version.outputs.tag }}' "${assets[@]}" --clobber --repo '${{ github.repository }}'
 
   publish:
     needs: [version, build]
