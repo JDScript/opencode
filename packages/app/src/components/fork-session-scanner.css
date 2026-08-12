@@ -1,0 +1,38 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for fork-session-scanner.tsx.
+ */
+
+[data-component="fork-session-scanner"] {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--v2-icon-icon-muted);
+}
+
+[data-slot="fork-session-scanner-cells"] {
+  display: inline-flex;
+  align-items: center;
+  /*
+   * Monospace with a fixed per-cell width: the two block glyphs do not share an advance width in every
+   * font, so without this the row would jitter horizontally as cells flip between them.
+   */
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  line-height: 1;
+  /* Opacity is set per cell inline; transition smooths the 40ms steps into a continuous sweep. */
+}
+
+[data-slot="fork-session-scanner-cells"] > span {
+  display: inline-block;
+  width: 5px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The component holds frame 0, so the trail is already static; dim it to read as a resting state. */
+  [data-slot="fork-session-scanner-cells"] > span {
+    opacity: 0.6 !important;
+  }
+}

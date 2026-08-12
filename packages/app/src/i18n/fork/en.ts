@@ -8,6 +8,8 @@
 export const dict = {
   "fork.settings.tab.configFile": "Config file",
 
+  "fork.prompt.working": "Working",
+
   "fork.config.section.title": "Global configuration",
   "fork.config.section.description":
     "Edit the selected server's global config file. Most changes take effect immediately; server listen options (port, hostname, cors, mdns) require restarting the server manually.",

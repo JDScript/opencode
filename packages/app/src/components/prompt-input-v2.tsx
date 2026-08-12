@@ -9,6 +9,9 @@ import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 import { createEffect, createMemo, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
+// FORK
+import { ForkSessionScanner } from "@/components/fork-session-scanner"
+import { SessionContextUsage } from "@/components/session-context-usage"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
@@ -42,6 +45,8 @@ export type PromptInputV2ComposerProps = {
 export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission">
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
+  // FORK: undefined on the new-session page. See the defineProperty near the end of the controller.
+  readonly sessionId: string | undefined
 }
 
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
@@ -58,6 +63,21 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         variantControlVisible={!props.controller.model.loading}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
+        // FORK: the TUI's prompt scanner, shown while the session is working. Upstream only surfaces
+        // that state on the session tab, which is easy to miss when the tab strip is not in view.
+        // `undefined` rather than a wrapped <Show> so the slot's spacer does not render when idle.
+        leadingControl={
+          props.controller.view.submit.working?.() ? (
+            <ForkSessionScanner label={language.t("fork.prompt.working")} />
+          ) : undefined
+        }
+        // FORK: context usage, next to send instead of only in the session header. Guarded on a session
+        // id because SessionContextUsage needs the session layout context, which the new-session page
+        // that shares this composer does not provide. Props compile to getters, so the component is
+        // never constructed on that branch.
+        trailingControl={
+          props.controller.sessionId ? <SessionContextUsage placement="top" buttonAppearance="v2" /> : undefined
+        }
         modelControl={
           <PromptInputV2ModelControl
             loading={props.controller.model.loading}
@@ -409,6 +429,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
+  // FORK: lets the composer tell a real session apart from the new-session page, which shares this
+  // component but has no session layout context.
+  Object.defineProperty(controller, "sessionId", { get: () => props.controls.session.id })
 
   command.register("prompt-input", () => [
     {
