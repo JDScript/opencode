@@ -30,6 +30,7 @@ import { LocationMiddleware } from "@opencode-ai/server/location"
 import { SessionLocationMiddleware } from "@opencode-ai/server/middleware/session-location"
 import { GlobalApi } from "./groups/global"
 import { ForkConfigApi } from "./groups/fork-config" // FORK
+import { ForkUsageApi } from "./groups/fork-usage" // FORK
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
@@ -84,6 +85,7 @@ export const OpenCodeHttpApi = HttpApi.make("opencode")
   .addHttpApi(ServerApi)
   .addHttpApi(PtyConnectApi)
   .addHttpApi(ForkConfigApi) // FORK
+  .addHttpApi(ForkUsageApi) // FORK
   .annotate(HttpApi.AdditionalSchemas, [
     EventSchema,
     Question.Replied,

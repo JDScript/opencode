@@ -90,6 +90,8 @@ import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
 import { forkConfigHandlers } from "./handlers/fork-config" // FORK
 import { ForkConfigApi } from "./groups/fork-config" // FORK
+import { forkUsageHandlers } from "./handlers/fork-usage" // FORK
+import { ForkUsageApi } from "./groups/fork-usage" // FORK
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -153,6 +155,12 @@ const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
 // config file is not directory-scoped, so no workspace routing or instance context.
 const forkConfigApiRoutes = HttpApiBuilder.layer(ForkConfigApi).pipe(
   Layer.provide(forkConfigHandlers),
+  Layer.provide(httpApiAuthLayer),
+)
+// FORK: same shape as above. `Database.Service` comes from the app-level LayerNode group, so usage
+// aggregation needs no workspace routing or instance context either — it reads the whole database.
+const forkUsageApiRoutes = HttpApiBuilder.layer(ForkUsageApi).pipe(
+  Layer.provide(forkUsageHandlers),
   Layer.provide(httpApiAuthLayer),
 )
 const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
@@ -285,6 +293,7 @@ export function createRoutes(
     rootApiRoutes,
     eventApiRoutes,
     forkConfigApiRoutes, // FORK
+    forkUsageApiRoutes, // FORK
     ptyConnectApiRoutes,
     instanceRoutes,
     serverRoutes,
