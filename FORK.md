@@ -53,6 +53,32 @@ upstream/dev  ──►  dev        pure mirror, fast-forward only, never edited
 - `git rerere` is enabled, so a conflict resolved once is replayed automatically on later rebases.
 - `upstream`'s push URL is deliberately set to `DISABLED_DO_NOT_PUSH_TO_UPSTREAM`.
 
+### Every upstream workflow is disabled in this fork
+
+All 26 of them, through `gh workflow disable` — a repository setting, so it costs no seam and survives every
+rebase. Only `release-fork.yml` is active.
+
+They had to go because a fork inherits them with write permissions and almost none of them check which
+repository they are in: of the seven scheduled workflows only `stats` has a guard, so `compliance-close` was
+running every thirty minutes with `issues: write` and `pull-requests: write`, `beta` hourly with
+`contents: write` and a script that can push, and `close-prs` daily. That started the day `jdscript` became
+the default branch, which is where GitHub reads schedules from.
+
+The ones triggered by a push to `dev` are worse than useless rather than merely wasteful: `dev` is a pure
+mirror, so `test`, `typecheck` and `nix-eval` were testing upstream's tree and never this fork's, while
+`generate` sat there with `contents: write` ready to commit generated files onto the mirror. Nothing watches
+`jdscript`, so nothing was lost by turning them all off.
+
+To check, after any rebase or any upstream change to `.github/workflows/`:
+
+```sh
+gh workflow list --repo JDScript/opencode --json name,path,state \
+  --jq '.[] | select(.state=="active") | .path'   # must print only release-fork.yml
+```
+
+A workflow file that upstream _adds_ later arrives enabled, which is why this is worth re-checking rather
+than assuming.
+
 ### Pushing `jdscript` triggers nothing — but releasing builds what GitHub has
 
 No workflow fires on a push to this branch. Every upstream workflow is either limited to
@@ -81,6 +107,9 @@ git switch jdscript && git rebase dev
 # Push the mirror too, so GitHub's compare views and the fork's own record of "which upstream point are
 # we on" stay honest. The release workflow deliberately does not depend on this — it asks upstream
 # directly — precisely because a stale mirror is easy to leave behind.
+#
+# This is the push that fires upstream's own CI, since `dev` is what those workflows watch. Harmless only
+# because they are all disabled — see the section above, and re-check it if upstream added a workflow.
 git push origin dev
 ```
 
