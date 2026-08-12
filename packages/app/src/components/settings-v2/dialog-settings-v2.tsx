@@ -10,6 +10,7 @@ import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import "./settings-v2.css"
 import { SettingsServersV2 } from "./servers"
+import { SettingsForkConfigV2 } from "./fork-config" // FORK
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLayout } from "@/context/layout"
 import { useTabs } from "@/context/tabs"
@@ -83,6 +84,11 @@ export const DialogSettings: Component<{
                       <Icon name="models" />
                       {language.t("settings.models.title")}
                     </TabsV2.Trigger>
+                    {/* FORK */}
+                    <TabsV2.Trigger value="fork-config">
+                      <Icon name="code" />
+                      {language.t("fork.settings.tab.configFile")}
+                    </TabsV2.Trigger>
                   </div>
                 </div>
               </div>
@@ -107,6 +113,10 @@ export const DialogSettings: Component<{
         </TabsV2.Content>
         <TabsV2.Content value="models" class="settings-v2-panel">
           <SettingsModelsV2 />
+        </TabsV2.Content>
+        {/* FORK */}
+        <TabsV2.Content value="fork-config" class="settings-v2-panel">
+          <SettingsForkConfigV2 />
         </TabsV2.Content>
       </TabsV2>
     </Dialog>
