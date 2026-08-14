@@ -43,6 +43,57 @@
   display: none;
 }
 
+/*
+ * Refetching: a slight fade of the whole column, with pointer events kept live so the range buttons stay usable.
+ * Deliberately not a spinner or a skeleton — the previous data is still valid and still on screen, and replacing
+ * it with placeholders makes a 20ms refetch look like a page load.
+ */
+[data-component="fork-usage"][data-loading]:not([data-cold]) {
+  opacity: 0.62;
+  transition: opacity 120ms ease-out;
+}
+
+[data-component="fork-usage"] {
+  transition: opacity 160ms ease-out;
+}
+
+/*
+ * The one loading indicator, beside the range control. `Spinner` is 18px by default, which is sized for a button
+ * and overpowers this row, so it is shrunk through its own `width` — `aspect-ratio` keeps it square from that alone.
+ *
+ * One, and not one per block: there are five empty boxes on a cold open, and a pulsing grid in each made waiting
+ * the loudest thing on the page. Those say "loading" in words; the motion lives here, next to what triggers it.
+ */
+[data-slot="fork-usage-busy"] {
+  display: inline-flex;
+  align-items: center;
+  color: var(--v2-text-text-muted);
+}
+
+[data-slot="fork-usage-busy"] [data-component="spinner"] {
+  width: 14px;
+}
+
+/*
+ * The first open, which is the opposite case: there is no previous data to keep, so the figures stand in as blocks
+ * until the first response lands. Static, in the spirit of `HomeSessionSkeleton` — this app does not shimmer.
+ *
+ * `bg-layer-02`, two steps from the surface these sit on, rather than that skeleton's `bg-deep` at 70%. Copied
+ * literally it vanished: `bg-deep` is a step *below* the page background it was written for and a step *above* this
+ * dialog's — the same token, the opposite relationship — and the 70% then closed what little gap was left.
+ *
+ * Sized in `em` so each block matches the type it replaces: the lead figure is much larger than the four beside it,
+ * and one shared width made the header look broken rather than pending.
+ */
+[data-slot="fork-usage-placeholder"] {
+  display: inline-block;
+  width: 3.4em;
+  height: 0.72em;
+  border-radius: 3px;
+  background: var(--v2-background-bg-layer-02);
+  vertical-align: baseline;
+}
+
 [data-slot="fork-usage-header-actions"] {
   display: flex;
   align-items: center;
