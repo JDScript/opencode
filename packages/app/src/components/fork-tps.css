@@ -1,0 +1,35 @@
+/*
+ * FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+ *
+ * Styles for fork-tps.tsx.
+ */
+
+[data-component="fork-tps"] {
+  display: inline-flex;
+  align-items: baseline;
+  flex: none;
+  gap: 4px;
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+[data-slot="fork-tps-label"] {
+  color: var(--v2-text-text-faint);
+  /* Not an abbreviation the reader has to parse at a glance, so it sits back from the number. */
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+[data-slot="fork-tps-value"] {
+  /*
+   * Tabular monospace, and a floor on the width: the value re-renders every second and swings across the
+   * format thresholds (9.87 → 12.3 → 140), which without both would shove the working indicator sideways
+   * on almost every tick.
+   */
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+  text-align: right;
+}

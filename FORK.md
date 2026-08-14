@@ -161,19 +161,19 @@ Match the comment prefix, not the bare word: upstream's `patches/install-korean-
 header (`mise.toml`, `.github/workflows/release-fork.yml`) — those are **not** seams, they do not exist
 upstream and cannot conflict.
 
-| File                                                             | Seam                                                                               |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkConfigApi` and `ForkUsageApi` on `OpenCodeHttpApi`                     |
-| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkConfigApiRoutes` and `forkUsageApiRoutes` layers, in `createRoutes`           |
-| `packages/opencode/src/config/config.ts`                         | `export` on `globalConfigFile()`                                                   |
-| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`         |
-| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                           |
-| `packages/app/src/context/language.tsx`                          | Merges the fork i18n dictionaries                                                  |
-| `packages/app/src/context/layout.tsx`                            | `openProject` extraction + the project-seeding effect                              |
-| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | Config-file tab trigger and content                                                |
-| `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `leadingControl` / `trailingControl` slots on the prompt action row                |
-| `packages/app/src/components/prompt-input-v2.tsx`                | Fills both slots (scanner, context usage), exposes `sessionId`, registers `/usage` |
-| `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                          |
+| File                                                             | Seam                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkConfigApi` and `ForkUsageApi` on `OpenCodeHttpApi`                  |
+| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkConfigApiRoutes` and `forkUsageApiRoutes` layers, in `createRoutes`        |
+| `packages/opencode/src/config/config.ts`                         | `export` on `globalConfigFile()`                                                |
+| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`      |
+| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                        |
+| `packages/app/src/context/language.tsx`                          | Merges the fork i18n dictionaries                                               |
+| `packages/app/src/context/layout.tsx`                            | `openProject` extraction + the project-seeding effect                           |
+| `packages/app/src/components/settings-v2/dialog-settings-v2.tsx` | Config-file tab trigger and content                                             |
+| `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `trailingControl` slot on the prompt action row                                 |
+| `packages/app/src/components/prompt-input-v2.tsx`                | Fills it (TPS, scanner, context usage), exposes `sessionId`, registers `/usage` |
+| `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                       |
 
 ### Non-obvious choices worth keeping
 
@@ -204,6 +204,19 @@ upstream and cannot conflict.
   already a seam and is mounted for every session's composer, so the session entry point costs no extra
   upstream file. `CommandOption.slash` is the whole integration: `prompt-input-v2.tsx` builds its slash menu
   by filtering registered commands for that field.
+- **The live TPS meter reads the sync store, not the SSE stream.** The TUI plugin it is ported from
+  (`opencode-tps`, MIT — its README says the web UI cannot run it) subscribes to `message.part.delta`. There is
+  no public event hook in this app, so doing the same would mean cutting seams into `server-sdk.tsx` and
+  `server-session.ts` to watch data the store already holds — text landing in the store _is_ that delta, one
+  reactive step later. Two consequences worth knowing: the app coalesces adjacent deltas, so samples are fewer
+  and larger than the plugin's (the token total is preserved), and a part first seen already part-written
+  contributes nothing, or mounting mid-reply would charge every character on screen to that instant.
+- **The TPS figure is an estimate, and cannot be otherwise.** A streaming delta carries text, not a token
+  count; real counts arrive with `step-finish` at the end of a step, far too coarse for a live meter. It is
+  UTF-8 bytes over five — the plugin's heuristic — which is close for English prose and reads low for CJK,
+  where three bytes per character often buys a token or more. This is the same reason the usage dashboard has
+  no TPS column: there, nothing forces an estimate, and the stored data cannot support a real one either
+  (Anthropic times reasoning but reports zero reasoning tokens; OpenAI reports the tokens with no span).
 - **The usage button's icon is hand-drawn.** The v2 set has no chart, graph or statistics icon among its 37,
   and `Icon` silently falls back to `plus` for an unknown name (`icon.tsx:190`) — so a guessed name would
   render a plus sign with no error anywhere.

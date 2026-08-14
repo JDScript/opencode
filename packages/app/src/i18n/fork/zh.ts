@@ -11,6 +11,9 @@ export const dict = {
 
   "fork.prompt.working": "正在工作",
 
+  "fork.tps.label": "TPS",
+  "fork.tps.title": "最近几秒的输出速度（token/秒）。按到达的文本估算，非精确计数。",
+
   "fork.config.section.title": "全局配置",
   "fork.config.section.description":
     "编辑所选服务器的全局配置文件。大部分改动立即生效；服务器监听参数（port、hostname、cors、mdns）需要手动重启服务器。",

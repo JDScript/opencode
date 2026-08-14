@@ -11,6 +11,7 @@ import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 // FORK
 import { ForkSessionScanner } from "@/components/fork-session-scanner"
+import { ForkTps } from "@/components/fork-tps"
 import { useForkUsageCommand } from "@/components/fork-usage/use-usage-dialog"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
@@ -71,20 +72,33 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         variantControlVisible={!props.controller.model.loading}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
-        // FORK: the TUI's prompt scanner, shown while the session is working. Upstream only surfaces
-        // that state on the session tab, which is easy to miss when the tab strip is not in view.
-        // `undefined` rather than a wrapped <Show> so the slot's spacer does not render when idle.
-        leadingControl={
-          props.controller.view.submit.working?.() ? (
-            <ForkSessionScanner label={language.t("fork.prompt.working")} />
-          ) : undefined
-        }
-        // FORK: context usage, next to send instead of only in the session header. Guarded on a session
-        // id because SessionContextUsage needs the session layout context, which the new-session page
-        // that shares this composer does not provide. Props compile to getters, so the component is
-        // never constructed on that branch.
+        // FORK: three readouts gathered at the send end of the footer, in the order they answer "what is
+        // happening": how fast, that it is happening at all, and what it has cost so far.
+        //
+        // The scanner used to sit in `leadingControl`, at the far left. It read as unrelated to anything
+        // around it there — the left of that row is the add menu, the agent and the model — while the
+        // right is already where this session's live state is reported. Moving it also retires that seam:
+        // one slot now carries all three.
+        //
+        // `undefined` rather than a wrapped <Show> so the slot's spacer does not render when there is
+        // nothing to put in it. Guarded on a session id because SessionContextUsage needs the session
+        // layout context, which the new-session page sharing this composer does not provide; props
+        // compile to getters, so nothing here is constructed on that branch.
         trailingControl={
-          props.controller.sessionId ? <SessionContextUsage placement="top" buttonAppearance="v2" /> : undefined
+          props.controller.sessionId ? (
+            <div class="flex items-center gap-2">
+              <ForkTps
+                sessionID={props.controller.sessionId}
+                working={props.controller.view.submit.working?.() ?? false}
+                label={language.t("fork.tps.label")}
+                title={language.t("fork.tps.title")}
+              />
+              <Show when={props.controller.view.submit.working?.()}>
+                <ForkSessionScanner label={language.t("fork.prompt.working")} />
+              </Show>
+              <SessionContextUsage placement="top" buttonAppearance="v2" />
+            </div>
+          ) : undefined
         }
         modelControl={
           <PromptInputV2ModelControl
