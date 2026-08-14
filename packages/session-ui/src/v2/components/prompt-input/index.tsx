@@ -44,9 +44,8 @@ export type PromptInputV2Props = {
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
-  // FORK: slots at either end of the action row. Both sit outside the group that is dimmed and made
-  // inert in shell mode, so a working indicator stays visible there.
-  leadingControl?: JSX.Element
+  // FORK: a slot at the send end of the action row, for session-level indicators. Sits outside the group
+  // that is dimmed and made inert in shell mode, so a working indicator stays visible there.
   trailingControl?: JSX.Element
 }
 
@@ -200,10 +199,6 @@ export function PromptInputV2(props: PromptInputV2Props) {
         </div>
 
         <div class="flex h-11 items-center px-2">
-          {/* FORK */}
-          <Show when={props.leadingControl}>
-            <div class="flex flex-none items-center pr-1.5">{props.leadingControl}</div>
-          </Show>
           <div
             class="flex min-w-0 flex-1 items-center gap-1"
             aria-hidden={state.mode === "shell"}
