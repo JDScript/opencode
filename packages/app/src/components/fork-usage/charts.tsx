@@ -105,22 +105,36 @@ export function UsageBarChart(props: {
     return (all?.[all.length - 1] ?? 0) || 1
   }
 
-  /** Flattened into one tween so every segment of every bar in a column grows together. */
-  const flat = createMemo(() => [
-    ...props.requests.flatMap((entry) => entry.values),
-    ...props.cost.flatMap((entry) => entry.values),
-  ])
-  const eased = createTween(flat)
+  /**
+   * Flattened into one tween so every segment of every bar in a column grows together.
+   *
+   * The split is carried alongside rather than recomputed as `requests.length * columns.length`. That product
+   * assumes every series is exactly as long as the axis, and when one was not — the caller had pivoted requests
+   * onto only the non-empty buckets — it silently sliced the cost stack out of the middle of the request values.
+   * Walking each segment's own length instead cannot make that mistake, whatever the caller passes.
+   */
+  const flat = createMemo(() => {
+    const requests = props.requests.flatMap((entry) => entry.values)
+    const cost = props.cost.flatMap((entry) => entry.values)
+    return { values: [...requests, ...cost], split: requests.length }
+  })
+  const eased = createTween(() => flat().values)
   const unflatten = (series: Series[], offset: number) => {
     const values = eased()
-    const span = props.columns.length
-    return series.map((segment, index) => ({
-      ...segment,
-      values: values.slice(offset + index * span, offset + (index + 1) * span),
-    }))
+    // The tween snaps when the length changes, but it does so from an effect, which runs after the memos that
+    // read it. For that one render the previous range's array is still here, and slicing it would scatter its
+    // values across the new columns; the raw values are already correct, so use them and let the next frame ease.
+    if (values.length !== flat().values.length) return series
+    let cursor = offset
+    return series.map((segment) => {
+      const end = cursor + segment.values.length
+      const slice = values.slice(cursor, end)
+      cursor = end
+      return { ...segment, values: slice }
+    })
   }
   const easedRequests = createMemo(() => unflatten(props.requests, 0))
-  const easedCost = createMemo(() => unflatten(props.cost, props.requests.length * props.columns.length))
+  const easedCost = createMemo(() => unflatten(props.cost, flat().split))
 
   const slot = () => plot().width / Math.max(1, props.columns.length)
   /** Two bars in 62% of the slot, so adjacent periods stay visually separate. */
