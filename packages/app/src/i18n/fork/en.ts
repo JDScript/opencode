@@ -10,6 +10,9 @@ export const dict = {
 
   "fork.prompt.working": "Working",
 
+  "fork.tps.label": "TPS",
+  "fork.tps.title": "Output tokens per second over the last few seconds. Estimated from the text as it arrives.",
+
   "fork.config.section.title": "Global configuration",
   "fork.config.section.description":
     "Edit the selected server's global config file. Most changes take effect immediately; server listen options (port, hostname, cors, mdns) require restarting the server manually.",
