@@ -69,15 +69,28 @@
  */
 [data-slot="fork-usage-bar-requests"] {
   fill: var(--v2-icon-icon-muted);
-  opacity: 0.42;
+  /*
+   * `opacity` here and `fill-opacity` inline for the model ramp — the two multiply, so the ramp can be set per
+   * segment without overriding this. Setting both as `opacity` was a silent bug: the inline value won, so the
+   * request bars stopped reading as the quieter measure and the hover rule below never applied at all.
+   */
+  opacity: 0.5;
 }
 
 [data-slot="fork-usage-bar-cost"] {
   fill: var(--v2-icon-icon-base);
 }
 
+/* The hovered column's request bar comes up to meet the cost bar's weight. */
 [data-hovered] [data-slot="fork-usage-bar-requests"] {
-  opacity: 0.7;
+  opacity: 0.85;
+}
+
+/* The band behind the hovered slot: faint enough to sit under the bars without competing with them. */
+[data-slot="fork-usage-slot-highlight"] {
+  fill: var(--v2-icon-icon-base);
+  opacity: 0.07;
+  pointer-events: none;
 }
 
 [data-slot="fork-usage-hit"] {

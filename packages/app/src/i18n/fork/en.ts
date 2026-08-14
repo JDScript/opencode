@@ -48,7 +48,6 @@ export const dict = {
   "fork.usage.command": "View usage",
   "fork.usage.command.description": "Cost, requests and tokens for this session and everywhere else",
   "fork.usage.server": "Server",
-  "fork.usage.loading": "Loading usage…",
   "fork.usage.error.load": "Could not load usage",
   "fork.usage.error.unsupported":
     "{{server}} does not report usage. It is not running a build of this fork, or is running one older than this feature.",

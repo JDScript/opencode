@@ -48,7 +48,6 @@ export const dict = {
   "fork.usage.command": "查看用量",
   "fork.usage.command.description": "当前会话与其他各处的花费、请求数和 token",
   "fork.usage.server": "服务器",
-  "fork.usage.loading": "加载用量…",
   "fork.usage.error.load": "无法加载用量",
   "fork.usage.error.unsupported": "{{server}} 不上报用量。它没有运行本 fork 的构建，或者版本早于这个功能。",
 

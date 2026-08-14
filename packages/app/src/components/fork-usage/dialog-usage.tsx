@@ -18,6 +18,7 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
+import { Spinner } from "@opencode-ai/ui/spinner"
 import { createMemo, createResource, createSignal, For, Show, type JSX } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
@@ -104,13 +105,22 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
 
   const granularity = () => (preset().bucketMs >= DAY ? ("day" as const) : ("hour" as const))
 
-  const load = (query: () => UsageParams | undefined) =>
+  /**
+   * A resource that carries back the view it was fetched for.
+   *
+   * The pairing is the point. Reading the response alongside the *current* range was wrong during a switch:
+   * the new axis went live immediately while the rows were still the previous range's, so every old bucket
+   * fell outside the new axis and the chart emptied for a frame before the fetch landed. Bound together, the
+   * axis and the rows are always from the same snapshot, and the previous one simply stays on screen until the
+   * next arrives.
+   */
+  const load = <M,>(query: () => { params: UsageParams; meta: M } | undefined) =>
     createResource(
       () => {
-        const params = query()
-        return params === undefined ? undefined : { client: api(), params }
+        const next = query()
+        return next === undefined ? undefined : { client: api(), ...next }
       },
-      ({ client, params }) => client.usage(params),
+      async ({ client, params, meta }) => ({ meta, result: await client.usage(params) }),
     )
 
   /**
@@ -128,10 +138,16 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
     resource.error === undefined ? resource.latest : undefined
 
   /** Drives the summary, the chart and the model ranking — one request, three readings that cannot disagree. */
-  const [usage] = load(() => ({ ...displayWindow(), groupBy: ["time", "model"] as UsageDimension[] }))
+  const [usage] = load(() => ({
+    params: { ...displayWindow(), groupBy: ["time", "model"] as UsageDimension[] },
+    meta: { granularity: granularity(), from: displayWindow().from, to: Date.now() },
+  }))
 
   /** Drives the tree and, summed per project, the project ranking. */
-  const [structure] = load(() => ({ ...displayWindow(), groupBy: ["session", "project", "agent"] as UsageDimension[] }))
+  const [structure] = load(() => ({
+    params: { ...displayWindow(), groupBy: ["session", "project", "agent"] as UsageDimension[] },
+    meta: undefined,
+  }))
 
   /**
    * The session view drops three blocks rather than showing degenerate versions of them.
@@ -153,18 +169,18 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
   const [heatmap] = load(() =>
     props.sessionID
       ? undefined
-      : { groupBy: ["time"] as UsageDimension[], bucketMs: HOUR, originMs: localDayOrigin(Date.now()) },
+      : {
+          params: { groupBy: ["time"] as UsageDimension[], bucketMs: HOUR, originMs: localDayOrigin(Date.now()) },
+          meta: undefined,
+        },
   )
 
   /** Hourly rows folded onto the display granularity, with the axis covering the whole range. */
-  const aligned = createMemo(() =>
-    alignBuckets({
-      rows: settled(usage)?.rows ?? [],
-      granularity: granularity(),
-      from: displayWindow().from,
-      to: Date.now(),
-    }),
-  )
+  const aligned = createMemo(() => {
+    const snapshot = settled(usage)
+    if (snapshot === undefined) return { columns: [], rows: [] }
+    return alignBuckets({ rows: snapshot.result.rows, ...snapshot.meta })
+  })
   const rows = createMemo<UsageRow[]>(() => aligned().rows)
   const summary = createMemo(() => totals(rows()))
 
@@ -212,7 +228,15 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
     }),
   )
 
-  /** Requests split by the same models as the cost stack, in the same order, so segments line up across bars. */
+  /**
+   * Requests split by the same models as the cost stack, in the same order, so segments line up across bars.
+   *
+   * On the same `columns` as the cost stack, and not on the ones `shapeSeries` would collect for itself. Omitting
+   * them here was a real bug: requests pivoted onto only the buckets that had rows, so a range with an idle day
+   * shifted every request bar left of its own column — a quiet Tuesday drew Thursday's requests under Tuesday's
+   * label, while the readout below, which indexes the axis, correctly said nothing happened. Passing the axis
+   * also keeps both stacks the same length, which the chart's tween relies on.
+   */
   const requestSeries = createMemo<Series[]>(
     () =>
       shapeSeries({
@@ -222,6 +246,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
           key: `${row.providerID ?? ""}/${row.modelID ?? ""}`,
           label: row.modelID ?? language.t("fork.usage.value.unset"),
         }),
+        columns: aligned().columns,
         order: shaped().series.map((entry) => entry.key),
         otherLabel: language.t("fork.usage.chart.other"),
         singleLabel: language.t("fork.usage.chart.all"),
@@ -259,7 +284,9 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
     shaped().columns.map((bucket) => bucketLabels(bucket, preset().bucketMs, locale())),
   )
 
-  const tree = createMemo(() => buildSessionTree(settled(structure)?.rows ?? [], language.t("fork.usage.project.none")))
+  const tree = createMemo(() =>
+    buildSessionTree(settled(structure)?.result.rows ?? [], language.t("fork.usage.project.none")),
+  )
 
   /** Project totals come from the tree, so the ranking and the tree can never tell different stories. */
   const projects = createMemo<BarRow[]>(() =>
@@ -293,7 +320,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
   })
 
   const heatmapDays = createMemo(() => {
-    const folded = alignBuckets({ rows: settled(heatmap)?.rows ?? [], granularity: "day" })
+    const folded = alignBuckets({ rows: settled(heatmap)?.result.rows ?? [], granularity: "day" })
     const byDay = new Map<number, number>()
     for (const row of folded.rows) byDay.set(row.bucket!, (byDay.get(row.bucket!) ?? 0) + row.cost)
     return [...byDay.entries()].map(([day, value]) => ({ day, value }))
@@ -306,7 +333,31 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
   })
 
   const sessionCount = () => tree().filter((node) => node.kind !== "project").length
-  const waiting = (loading: boolean) => language.t(loading ? "fork.usage.loading" : "fork.usage.chart.empty")
+
+  /**
+   * Nothing has arrived yet, as opposed to something having arrived and been empty.
+   *
+   * The two look identical from inside the memos — both give zero rows — and they need opposite treatment, which
+   * the first version got half right. A refetch keeps its old data on screen and only wants the dim; a first open
+   * has nothing at all, and reporting that as "nothing in this range" states a fact about the range that has not
+   * been established yet. The empty copy is the range's answer, so it may only be shown once the range has one.
+   */
+  const cold = (kind: "range" | "history" = "range") =>
+    kind === "history"
+      ? settled(heatmap) === undefined && heatmap.error === undefined
+      : settled(usage) === undefined && failure() === undefined
+
+  /**
+   * Shown when there is genuinely nothing to draw — or, before the first response, that one is still coming.
+   *
+   * Text only, with no spinner of its own. There are five of these boxes on a cold open — chart, projects, models,
+   * tree, calendar — and a pulsing grid in each turned "waiting" into the loudest thing on the page. The one
+   * indicator lives in the header; here the quiet word is enough, next to a summary already standing in as blocks.
+   */
+  const nothing = (kind: "range" | "history" = "range") =>
+    cold(kind)
+      ? language.t("common.loading")
+      : language.t(kind === "history" ? "fork.usage.heatmap.empty" : "fork.usage.chart.empty")
 
   return (
     <Dialog
@@ -315,6 +366,16 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
       title={language.t(props.sessionID ? "fork.usage.session.title" : "fork.usage.title")}
       action={
         <div data-slot="fork-usage-header-actions">
+          {/*
+            The indicator for a refetch, which the empty boxes cannot carry: their content is still on screen and
+            valid, so there is no box to put a spinner in. Sitting with the range control, it also explains the dim
+            beside the thing that caused it. `aria-label` because a bare spinner announces nothing.
+          */}
+          <Show when={usage.loading || structure.loading || heatmap.loading}>
+            <span data-slot="fork-usage-busy" role="status" aria-label={language.t("common.loading")}>
+              <Spinner />
+            </span>
+          </Show>
           <Show when={!props.sessionID && servers.list.length > 1}>
             <SelectV2
               appearance="inline"
@@ -352,7 +413,19 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
         </div>
       }
     >
-      <div data-component="fork-usage">
+      {/*
+        `data-loading` dims the page instead of any block replacing its content with the word "loading".
+        Between the paired snapshot above and this, a range switch now keeps the previous chart, bars and tree on
+        screen and fades them slightly until the next arrives — where before every section emptied, the summary
+        dropped to zero and the layout jumped twice per switch.
+      */}
+      <div
+        data-component="fork-usage"
+        data-loading={usage.loading || structure.loading ? "" : undefined}
+        // Cancels that fade on a first open, where there is nothing to fade: the placeholders would come through at
+        // 0.7 of 0.62 and read as barely-there text rather than as blocks standing in for figures.
+        data-cold={cold() ? "" : undefined}
+      >
         <Show
           when={failure() === undefined}
           fallback={
@@ -371,9 +444,18 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
             anyone opens this, and the rest are the context that explains it — a flat grid said they mattered
             equally and gave the eye nowhere to land.
           */}
+          {/*
+            Every figure here is a placeholder until the first response lands. Rendered as blocks rather than as
+            the zeros the memos legitimately produce from no rows: `$0.00` is a claim, and on a cold open it was
+            wrong for as long as the request took — and worse, it was wrong in the one place the eye goes first.
+          */}
           <header data-slot="fork-usage-summary">
             <div data-slot="fork-usage-summary-lead">
-              <span data-slot="fork-usage-summary-figure">{cost(summary().cost)}</span>
+              <span data-slot="fork-usage-summary-figure">
+                <Show when={!cold()} fallback={<span data-slot="fork-usage-placeholder" aria-hidden="true" />}>
+                  {cost(summary().cost)}
+                </Show>
+              </span>
               <span data-slot="fork-usage-summary-caption">{language.t("fork.usage.metric.cost")}</span>
             </div>
             <dl data-slot="fork-usage-summary-rest">
@@ -396,9 +478,11 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
                   <div data-slot="fork-usage-summary-item">
                     <dt>{language.t(`fork.usage.metric.${item.id}`)}</dt>
                     <dd>
-                      {item.value}
-                      <Show when={item.note}>
-                        <span data-slot="fork-usage-summary-note">{item.note}</span>
+                      <Show when={!cold()} fallback={<span data-slot="fork-usage-placeholder" aria-hidden="true" />}>
+                        {item.value}
+                        <Show when={item.note}>
+                          <span data-slot="fork-usage-summary-note">{item.note}</span>
+                        </Show>
                       </Show>
                     </dd>
                   </div>
@@ -419,20 +503,24 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
               formatCost={cost}
               formatCount={count}
               onHover={setInspected}
-              emptyLabel={waiting(usage.loading)}
+              emptyLabel={nothing()}
               label={language.t("fork.usage.chart.label")}
             />
-            <UsageReadout
-              caption={
-                inspected() === undefined
-                  ? language.t(`fork.usage.range.whole.${range()}`)
-                  : (columns()[inspected()!]?.label ?? "")
-              }
-              total={summary()}
-              rows={readout()}
-              columns={readoutColumns()}
-            />
-            <Show when={settled(usage)?.truncated}>
+            {/* Withheld rather than drawn as zeros: a table of them under a chart that says "loading" reads as a
+                finding, and it is only the absence of one. */}
+            <Show when={!cold()}>
+              <UsageReadout
+                caption={
+                  inspected() === undefined
+                    ? language.t(`fork.usage.range.whole.${range()}`)
+                    : (columns()[inspected()!]?.label ?? "")
+                }
+                total={summary()}
+                rows={readout()}
+                columns={readoutColumns()}
+              />
+            </Show>
+            <Show when={settled(usage)?.result.truncated}>
               <p data-slot="fork-usage-warning" role="status">
                 {language.t("fork.usage.truncated")}
               </p>
@@ -445,7 +533,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
                 <header data-slot="fork-usage-section-head">
                   <h3 data-slot="fork-usage-heading">{language.t("fork.usage.projects.title")}</h3>
                 </header>
-                <UsageBars rows={projects()} formatValue={cost} emptyLabel={waiting(structure.loading)} />
+                <UsageBars rows={projects()} formatValue={cost} emptyLabel={nothing()} />
               </section>
             </Show>
 
@@ -453,7 +541,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
               <header data-slot="fork-usage-section-head">
                 <h3 data-slot="fork-usage-heading">{language.t("fork.usage.models.title")}</h3>
               </header>
-              <UsageBars rows={models()} formatValue={cost} emptyLabel={waiting(usage.loading)} />
+              <UsageBars rows={models()} formatValue={cost} emptyLabel={nothing()} />
             </section>
           </div>
 
@@ -481,7 +569,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
                 }
                 weekdayLabels={weekdays()}
                 // Its own copy, because the calendar is all-history: "nothing in this range" would be wrong.
-                emptyLabel={language.t(heatmap.loading ? "fork.usage.loading" : "fork.usage.heatmap.empty")}
+                emptyLabel={nothing("history")}
                 label={language.t("fork.usage.heatmap.label")}
               />
               <hr data-slot="fork-usage-rule" />
@@ -497,9 +585,12 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
                   <Icon name="chevron-down" size="small" />
                 </span>
                 {language.t("fork.usage.sessions.title")}
-                <span data-slot="fork-usage-disclosure-count">
-                  {language.t("fork.usage.sessions.count", { count: String(sessionCount()) })}
-                </span>
+                {/* Counted from `structure`, so it waits on that one and not on the chart's request. */}
+                <Show when={settled(structure) !== undefined}>
+                  <span data-slot="fork-usage-disclosure-count">
+                    {language.t("fork.usage.sessions.count", { count: String(sessionCount()) })}
+                  </span>
+                </Show>
               </button>
             </Show>
 
@@ -509,7 +600,7 @@ export function DialogUsage(props: { sessionID?: string }): JSX.Element {
                 formatValue={cost}
                 formatRequests={requestsNote}
                 defaultOpen={scoped()}
-                emptyLabel={waiting(structure.loading)}
+                emptyLabel={nothing()}
               />
             </Show>
           </section>
