@@ -179,6 +179,54 @@ describe("shapeSeries ordering", () => {
   })
 })
 
+describe("two stacks over one axis", () => {
+  /**
+   * The regression this exists for: the chart draws a cost stack and a request stack against the same axis, and
+   * the readout under it indexes that axis. The dialog passed `columns` when shaping cost and forgot to when
+   * shaping requests, so requests pivoted onto only the buckets that had rows. Every idle day then pulled the
+   * request bars one column left of their own label — an empty Tuesday drew Thursday's requests, taller than the
+   * bar beside it, while the readout for that column correctly reported nothing at all.
+   */
+  const days = [0, DAY, 2 * DAY, 3 * DAY]
+  const rows = [
+    row({ bucket: 0, cost: 8, requests: 30, modelID: "sol" }),
+    // DAY is idle — no row at all, which is what the endpoint returns for it.
+    row({ bucket: 2 * DAY, cost: 1, requests: 5, modelID: "sol" }),
+    row({ bucket: 3 * DAY, cost: 4, requests: 90, modelID: "sol" }),
+  ]
+  const stack = (metric: (entry: UsageRow) => number, columns?: number[]) =>
+    shapeSeries({
+      rows,
+      metric,
+      seriesOf: (entry) => ({ key: entry.modelID!, label: entry.modelID! }),
+      columns,
+      otherLabel: "other",
+      singleLabel: "all",
+    })
+
+  test("both stacks land on the axis they are given, gaps included", () => {
+    const cost = stack((entry) => entry.cost, days)
+    const requests = stack((entry) => entry.requests, days)
+    expect(cost.columns).toEqual(days)
+    expect(requests.columns).toEqual(days)
+    expect(cost.series[0].values).toEqual([8, 0, 1, 4])
+    expect(requests.series[0].values).toEqual([30, 0, 5, 90])
+  })
+
+  test("the stacks stay the same length, which the chart's tween relies on", () => {
+    const cost = stack((entry) => entry.cost, days)
+    const requests = stack((entry) => entry.requests, days)
+    for (const series of [...cost.series, ...requests.series]) expect(series.values.length).toBe(days.length)
+  })
+
+  test("without the axis a stack compacts its gaps away — the shape of the original bug", () => {
+    const loose = stack((entry) => entry.requests)
+    expect(loose.columns).toEqual([0, 2 * DAY, 3 * DAY])
+    // 90 requests sitting at index 2, which on the real axis is the idle day.
+    expect(loose.series[0].values).toEqual([30, 5, 90])
+  })
+})
+
 const treeRows = [
   row({
     sessionID: "root",
