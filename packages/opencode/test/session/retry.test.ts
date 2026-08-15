@@ -257,6 +257,20 @@ describe("session.retry.retryable", () => {
     })
   })
 
+  // FORK: the classification half of the empty-response fix, and the only new part of it. Everything
+  // downstream — five bounded attempts, the backoff, the stored error — is shared machinery that does not vary
+  // by error, so `policy stops after five retries` above already covers the bound for this one too.
+  test("retries empty provider responses", () => {
+    const request = MessageV2.fromError(
+      new ProviderError.ResponseStreamError('Provider returned no output and finished with reason "error"'),
+      { providerID },
+    )
+    expect(SessionV1.APIError.isInstance(request)).toBe(true)
+    expect(SessionRetry.retryable(request, retryProvider)).toEqual({
+      message: 'Provider returned no output and finished with reason "error"',
+    })
+  })
+
   test("does not retry context overflow errors", () => {
     const error = new SessionV1.ContextOverflowError({
       message: "Input exceeds context window of this model",

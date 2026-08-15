@@ -19,6 +19,7 @@ import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
+import { ProviderError } from "@/provider/error" // FORK
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
@@ -72,6 +73,10 @@ interface ProcessorContext extends Input {
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
+  // FORK: whether this stream attempt produced anything a reader would have seen — text, reasoning or a tool
+  // call. Per attempt, not per step: reset where the stream is (re)opened, so a retry starts clean. Gates the
+  // empty-response guard in `step-finish`, which may only replay a turn that produced nothing.
+  produced: boolean
 }
 
 type StreamEvent = LLMEvent
@@ -111,6 +116,7 @@ const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         reasoningMap: {},
+        produced: false, // FORK
       }
       let aborted = false
 
@@ -218,6 +224,9 @@ const layer = Layer.effect(
         name: string
         providerExecuted?: boolean
       }) {
+        // FORK: the one place all four tool events pass through. A turn that got as far as naming a tool must
+        // never be replayed — the retry re-sends the original request, so the tool would run twice.
+        ctx.produced = true
         const existing = yield* readToolCall(input.id)
         if (existing) {
           if (!input.providerExecuted || existing.part.metadata?.providerExecuted) return existing
@@ -294,6 +303,9 @@ const layer = Layer.effect(
           case "reasoning-delta":
             // Match dev: silently drop orphan deltas (no preceding reasoning-start).
             if (!(value.id in ctx.reasoningMap)) return
+            // FORK: reasoning counts as output — it is shown like any other part, so a retry would append a
+            // second copy of it.
+            if (value.text.length > 0) ctx.produced = true
             ctx.reasoningMap[value.id].text += value.text
             if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
             yield* session.updatePartDelta({
@@ -433,6 +445,20 @@ const layer = Layer.effect(
             return
 
           case "step-finish": {
+            // FORK: a fault-state finish with nothing to show for it is a failed request, not a finished
+            // turn. Recorded as a finish it stopped the session in silence — no error, no retry, straight to
+            // idle via prompt.ts's `exiting loop`. Failing is the whole fix: the retry policy already wraps
+            // this stream, so it brings the bounded attempts and the visible error on exhaustion.
+            //
+            // Raised before the snapshot and before any part is written, so spent attempts leave no
+            // step-finish parts behind. See FORK.md for why this error type and why not in the adapter.
+            if ((value.reason === "error" || value.reason === "unknown") && !ctx.produced) {
+              yield* Effect.fail(
+                new ProviderError.ResponseStreamError(
+                  `Provider returned no output and finished with reason "${value.reason}"`,
+                ),
+              )
+            }
             const completedSnapshot = yield* snapshot.track()
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
@@ -443,6 +469,19 @@ const layer = Layer.effect(
             ctx.assistantMessage.finish = value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            // FORK: the other half — output first, then "error". Replaying it would duplicate text or re-run a
+            // tool, so it is reported instead; the error makes `process()` return "stop". Set before the
+            // `updateMessage` below so that write persists it.
+            //
+            // Never "unknown" here: an unmapped finish reason on a turn that produced output is an ordinary
+            // completion, and several providers return one.
+            if (value.reason === "error" && ctx.produced && !ctx.assistantMessage.error) {
+              ctx.assistantMessage.error = new SessionV1.APIError({
+                message: 'Provider reported finish reason "error" after producing partial output',
+                isRetryable: false,
+                metadata: { code: "ProviderResponseStreamError" },
+              }).toObject()
+            }
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.reason,
@@ -454,6 +493,14 @@ const layer = Layer.effect(
               cost: usage.cost,
             })
             yield* session.updateMessage(ctx.assistantMessage)
+            // FORK: announced the way `halt` and prompt.ts's content-filter branch announce theirs; without
+            // it a client not re-reading the message would show no change.
+            if (ctx.assistantMessage.error) {
+              yield* events.publish(Session.Event.Error, {
+                sessionID: ctx.assistantMessage.sessionID,
+                error: ctx.assistantMessage.error,
+              })
+            }
             if (ctx.snapshot) {
               const patch = yield* snapshot.patch(ctx.snapshot)
               if (patch.files.length) {
@@ -498,6 +545,9 @@ const layer = Layer.effect(
 
           case "text-delta":
             if (!ctx.currentText) return
+            // FORK: on a delta, not on `text-start` — an empty response can still open and close a text
+            // block without putting a character in it.
+            if (value.text.length > 0) ctx.produced = true
             ctx.currentText.text += value.text
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
             yield* session.updatePartDelta({
@@ -636,6 +686,8 @@ const layer = Layer.effect(
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
+            // FORK: inside the block `Effect.retry` re-runs, so each attempt is judged on its own output.
+            ctx.produced = false
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 

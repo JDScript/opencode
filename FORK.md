@@ -174,6 +174,7 @@ upstream and cannot conflict.
 | `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `trailingControl` slot on the prompt action row                                 |
 | `packages/app/src/components/prompt-input-v2.tsx`                | Fills it (TPS, scanner, context usage), exposes `sessionId`, registers `/usage` |
 | `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                       |
+| `packages/opencode/src/session/processor.ts`                     | Raises an empty fault-state response as a retryable error instead of finishing  |
 
 ### Non-obvious choices worth keeping
 
@@ -204,6 +205,33 @@ upstream and cannot conflict.
   already a seam and is mounted for every session's composer, so the session entry point costs no extra
   upstream file. `CommandOption.slash` is the whole integration: `prompt-input-v2.tsx` builds its slash menu
   by filtering registered commands for that field.
+- **An empty response in a fault state is raised as an error from `processor.ts`, and only from there.** A
+  provider that finishes with `finish: "error"` having produced nothing used to stop the session in silence:
+  the reason went onto the message, no error object was ever built, and the next pass through the prompt loop
+  found a `finish` that was not `tool-calls` and broke (`exiting loop`). Bedrock does it intermittently. Three
+  things about the fix are easy to undo by accident:
+  - **`processor.ts` is the only seam, and that is not a compromise.** `Effect.retry(SessionRetry.policy(…))`
+    already wraps the stream drain while `llm.stream()` sits inside it, so one `Effect.fail` in the event
+    handler buys the bounded retry, the backoff, the `retry` status, and `halt` storing a visible error and
+    returning `"stop"`. `retry.ts`, `prompt.ts` and the AI SDK adapter need nothing. The neighbouring
+    `provider-error` branch has always done exactly this with a bare `throw`.
+  - **It must not move into `ai-sdk.ts`.** Two runtimes produce this state: the AI SDK adapter (which passes
+    the reason through) and native Gemini's `MALFORMED_FUNCTION_CALL` (`protocols/gemini.ts`). A guard in the
+    adapter silently misses Gemini. `processor.ts` sees both as one `step-finish`.
+  - **`ProviderError.ResponseStreamError`, not a purpose-made error type.** `message-v2.ts` already maps it to
+    a retryable `APIError`, and `APIError` is one of the eight members of the **closed** `AssistantErrorSchema`
+    union in `packages/schema/src/v1/session.ts`. A ninth member would mean editing that union, core, and the
+    generated SDKs — which this fork never regenerates — and any client on an older build would fail to decode
+    the message it was stored on. `APICallError` was the other candidate and needs a fabricated `url`.
+
+  Reasoning counts as produced output, so a reasoning-only turn is reported rather than replayed: a retry
+  re-sends the original request, and the reader has already seen the reasoning. A turn that produced anything
+  and _then_ reported `"error"` is likewise reported, never replayed. `"unknown"` is replayed only when empty —
+  on a turn that said something it is an ordinary completion, which several providers return.
+
+  Upstreamable, and worth dropping if upstream lands an equivalent: issues #31430 and #41469, where PR #40531
+  covered only the `unknown` case.
+
 - **The live TPS meter reads the sync store, not the SSE stream.** The TUI plugin it is ported from
   (`opencode-tps`, MIT — its README says the web UI cannot run it) subscribes to `message.part.delta`. There is
   no public event hook in this app, so doing the same would mean cutting seams into `server-sdk.tsx` and
