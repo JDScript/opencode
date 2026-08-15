@@ -1169,3 +1169,200 @@ itFragmentFailure.live("session.processor effect tests retain partial legacy par
     { config: cfg },
   ),
 )
+
+// ---------------------------------------------------------------------------
+// FORK: empty provider responses. An empty fault is replayed; one that produced output is reported instead.
+//
+// On a stub `LLM.Service` rather than the HTTP mock, because `finish: "error"` cannot be reached through it —
+// the OpenAI-chat protocol maps every unrecognised finish_reason to "unknown". The counter is the assertion:
+// `stream()` runs once per attempt, so it says how many times the request was sent.
+// ---------------------------------------------------------------------------
+
+function countingLLM(streams: () => ReadonlyArray<ReadonlyArray<LLMEvent>>) {
+  const attempts = { count: 0 }
+  const all = streams()
+  const layer = Layer.succeed(
+    LLM.Service,
+    LLM.Service.of({
+      stream: () => {
+        const index = attempts.count++
+        return Stream.fromIterable(all[Math.min(index, all.length - 1)])
+      },
+    }),
+  )
+  return { attempts, layer }
+}
+
+const emptyStep = (reason: "error" | "unknown") => [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.stepFinish({ index: 0, reason }),
+  LLMEvent.finish({ reason }),
+]
+
+const textStep = (text: string) => [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.textStart({ id: "text-1" }),
+  LLMEvent.textDelta({ id: "text-1", text }),
+  LLMEvent.textEnd({ id: "text-1" }),
+  LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+  LLMEvent.finish({ reason: "stop" }),
+]
+
+const run = (
+  name: string,
+  streams: () => ReadonlyArray<ReadonlyArray<LLMEvent>>,
+  check: (input: {
+    attempts: { count: number }
+    value: "stop" | "continue" | "compact"
+    message: SessionV1.Assistant
+    parts: SessionV1.Part[]
+    seen: string[]
+  }) => void,
+) => {
+  const { attempts, layer } = countingLLM(streams)
+  const scoped = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, layer]]))
+  scoped.live(`session.processor effect tests ${name}`, () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const { processors, session, provider } = yield* boot()
+          const events = yield* EventV2Bridge.Service
+          const chat = yield* session.create({})
+          const parent = yield* user(chat.id, name)
+          const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+          const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+          const seen: string[] = []
+          const off = yield* events.listen((event) => {
+            seen.push(event.type)
+            return Effect.void
+          })
+          const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+          const value = yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: name }],
+            tools: {},
+          })
+          yield* off
+
+          check({ attempts, value, message: handle.message, parts: yield* MessageV2.parts(msg.id), seen })
+        }),
+      { config: cfg },
+    ),
+  )
+}
+
+run(
+  "retry an empty error response and recover",
+  () => [emptyStep("error"), textStep("after")],
+  (r) => {
+    expect(r.attempts.count).toBe(2)
+    expect(r.value).toBe("continue")
+    expect(r.parts).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: "after" })]))
+    expect(r.message.error).toBeUndefined()
+    // The spent attempt must not leave its own step-finish behind.
+    expect(r.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+  },
+)
+
+run(
+  "retry an empty unknown response and recover",
+  () => [emptyStep("unknown"), textStep("after")],
+  (r) => {
+    expect(r.attempts.count).toBe(2)
+    expect(r.value).toBe("continue")
+    expect(r.message.error).toBeUndefined()
+  },
+)
+
+run(
+  "do not retry an empty response that finished normally",
+  () => [
+    [
+      ...emptyStep("error").slice(0, 1),
+      LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+      LLMEvent.finish({ reason: "stop" }),
+    ],
+  ],
+  (r) => {
+    expect(r.attempts.count).toBe(1)
+    expect(r.message.error).toBeUndefined()
+  },
+)
+
+run(
+  "report but never replay an error after text",
+  () => [
+    [
+      LLMEvent.stepStart({ index: 0 }),
+      LLMEvent.textStart({ id: "text-1" }),
+      LLMEvent.textDelta({ id: "text-1", text: "partial" }),
+      LLMEvent.textEnd({ id: "text-1" }),
+      LLMEvent.stepFinish({ index: 0, reason: "error" }),
+      LLMEvent.finish({ reason: "error" }),
+    ],
+  ],
+  (r) => {
+    expect(r.attempts.count).toBe(1)
+    expect(r.value).toBe("stop")
+    expect(r.message.error?.name).toBe("APIError")
+    expect(r.parts).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial" })]))
+    expect(r.seen).toContain(Session.Event.Error.type)
+  },
+)
+
+run(
+  "report but never replay an error after reasoning",
+  () => [
+    [
+      LLMEvent.stepStart({ index: 0 }),
+      LLMEvent.reasoningStart({ id: "reasoning-1" }),
+      LLMEvent.reasoningDelta({ id: "reasoning-1", text: "thinking" }),
+      LLMEvent.reasoningEnd({ id: "reasoning-1" }),
+      LLMEvent.stepFinish({ index: 0, reason: "error" }),
+      LLMEvent.finish({ reason: "error" }),
+    ],
+  ],
+  (r) => {
+    expect(r.attempts.count).toBe(1)
+    expect(r.value).toBe("stop")
+    expect(r.message.error?.name).toBe("APIError")
+  },
+)
+
+run(
+  "report but never replay an error after a tool call",
+  () => [
+    [
+      LLMEvent.stepStart({ index: 0 }),
+      LLMEvent.toolInputStart({ id: "call-1", name: "lookup" }),
+      LLMEvent.toolInputEnd({ id: "call-1", name: "lookup" }),
+      LLMEvent.toolCall({ id: "call-1", name: "lookup", input: {}, providerExecuted: true }),
+      LLMEvent.toolResult({
+        id: "call-1",
+        name: "lookup",
+        result: { type: "text", value: "ok" },
+        providerExecuted: true,
+      }),
+      LLMEvent.stepFinish({ index: 0, reason: "error" }),
+      LLMEvent.finish({ reason: "error" }),
+    ],
+  ],
+  (r) => {
+    // The point of the whole guard: one send, so the tool ran exactly once.
+    expect(r.attempts.count).toBe(1)
+    expect(r.value).toBe("stop")
+    expect(r.parts.filter((part) => part.type === "tool")).toHaveLength(1)
+  },
+)
