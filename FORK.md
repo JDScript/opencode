@@ -174,6 +174,7 @@ upstream and cannot conflict.
 | `packages/session-ui/src/v2/components/prompt-input/index.tsx`   | `trailingControl` slot on the prompt action row                                 |
 | `packages/app/src/components/prompt-input-v2.tsx`                | Fills it (TPS, scanner, context usage), exposes `sessionId`, registers `/usage` |
 | `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                       |
+| `packages/opencode/src/provider/provider.ts`                     | Selects the Bedrock credential loader by SDK package, not only by provider id   |
 
 ### Non-obvious choices worth keeping
 
@@ -204,6 +205,30 @@ upstream and cannot conflict.
   already a seam and is mounted for every session's composer, so the session entry point costs no extra
   upstream file. `CommandOption.slash` is the whole integration: `prompt-input-v2.tsx` builds its slash menu
   by filtering registered commands for that field.
+- **Several Bedrock providers, one AWS profile each.** `custom()` in `provider.ts` is a map of per-provider
+  loaders keyed by **provider id**, and the loop that ran it looked each provider up by that id — so only the
+  provider literally called `amazon-bedrock` ever got a `credentialProvider`. Pointing a second provider at
+  the Bedrock package with `npm` loaded the right SDK with no credentials behind it, which is the wrong shape
+  for the real requirement: one profile that may reach a model another may not. The loop now
+  iterates the provider database and selects the Bedrock loader by **SDK package** as well as by id, and the
+  loader reads `provider.id` instead of the hardcoded string so each provider gets its own profile, region,
+  endpoint and auth entry. Two things are deliberate:
+  - **Only Bedrock is matched by package.** Generalising this to the whole map would change behaviour for
+    existing configs — `openai`'s loader forces `sdk.responses()` on every model, so any lookalike provider
+    declaring `npm: "@ai-sdk/openai"` would silently switch API surface. Bedrock is the only loader that reads
+    nothing but the provider's own config, so it is the only one that is safe to fan out.
+  - **`apiKey: ""` is pinned whenever a `credentialProvider` is injected.** `createAmazonBedrock` prefers a
+    bearer token over `credentialProvider`, and falls back to `AWS_BEARER_TOKEN_BEDROCK` when `apiKey` is
+    absent. That variable is process-global and the loader itself writes to it from `auth.json`, while SDKs are
+    built lazily at request time — so with two Bedrock providers the bearer token of whichever loaded second
+    would silently outrank the first one's profile. The empty string is falsy to the SDK's own
+    `trim().length > 0` check, which selects SigV4, and it also stops `resolveSDK` filling `apiKey` from
+    `provider.key`.
+
+  Upstreamable as-is. Upstream's own V2 stack already gates on the package in
+  `packages/core/src/plugin/provider/amazon-bedrock.ts`, so this only brings the live V1 path in line; drop it
+  if V1 is retired or upstream backports that gate.
+
 - **The live TPS meter reads the sync store, not the SSE stream.** The TUI plugin it is ported from
   (`opencode-tps`, MIT — its README says the web UI cannot run it) subscribes to `message.part.delta`. There is
   no public event hook in this app, so doing the same would mean cutting seams into `server-sdk.tsx` and

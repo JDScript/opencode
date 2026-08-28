@@ -139,6 +139,9 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "venice-ai-sdk-provider": () => import("venice-ai-sdk-provider").then((m) => m.createVenice),
 }
 
+// FORK: the set the Bedrock custom loader is selected by, so it is not restricted to the one provider id.
+const BEDROCK_PACKAGES = ["@ai-sdk/amazon-bedrock", "@ai-sdk/amazon-bedrock/mantle"]
+
 type CustomModelLoader = (sdk: any, modelID: string, options?: Record<string, any>, model?: Model) => Promise<any>
 type CustomVarsLoader = (options: Record<string, any>) => Record<string, string>
 type CustomDiscoverModels = () => Promise<Record<string, Model>>
@@ -298,9 +301,11 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         },
       }
     }),
-    "amazon-bedrock": Effect.fnUntraced(function* () {
-      const providerConfig = (yield* dep.config()).provider?.["amazon-bedrock"]
-      const auth = yield* dep.auth("amazon-bedrock")
+    "amazon-bedrock": Effect.fnUntraced(function* (provider: Info) {
+      // FORK: keyed off the provider's own id, not the literal "amazon-bedrock" — this loader also runs for
+      // any other provider pointing at the Bedrock SDK, so each reads its own profile, region and auth.
+      const providerConfig = (yield* dep.config()).provider?.[provider.id]
+      const auth = yield* dep.auth(provider.id)
       const env = yield* dep.env()
 
       // Region precedence: 1) config file, 2) env var, 3) default
@@ -357,6 +362,10 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         const credentialProviderOptions = profile ? { profile } : {}
 
         providerOptions.credentialProvider = fromNodeProviderChain(credentialProviderOptions)
+        // FORK: createAmazonBedrock prefers a bearer token over credentialProvider and falls back to
+        // AWS_BEARER_TOKEN_BEDROCK when apiKey is absent. That env var is process-global and another
+        // Bedrock provider's loader may set it after this one runs, so pin it empty to keep SigV4.
+        providerOptions.apiKey = ""
       }
 
       // Add custom endpoint if specified (endpoint takes precedence over baseURL)
@@ -1622,13 +1631,21 @@ const layer = Layer.effect(
           mergeProvider(providerID, patch)
         }
 
-        for (const [id, fn] of Object.entries(custom(dep))) {
+        const customLoaders = custom(dep)
+        for (const id of Object.keys(database)) {
           const providerID = ProviderV2.ID.make(id)
           if (disabled.has(providerID)) continue
           const data = database[providerID]
-          if (!data) {
-            continue
-          }
+          // FORK: iterates the database rather than the loader map, so Bedrock can also be matched by SDK
+          // package and several providers — one per AWS profile — each get credentials resolved. Only
+          // Bedrock: its loader reads nothing but that provider's own config, whereas openai's, say, would
+          // force the Responses API on every model of a lookalike provider.
+          const fn =
+            customLoaders[providerID] ??
+            (Object.values(data.models).some((model) => BEDROCK_PACKAGES.includes(model.api.npm))
+              ? customLoaders["amazon-bedrock"]
+              : undefined)
+          if (!fn) continue
           const result = yield* fn(data)
           if (result && (result.autoload || providers[providerID])) {
             if (result.getModel) modelLoaders[providerID] = result.getModel
