@@ -229,6 +229,59 @@ it.instance(
   { config: { provider: { "amazon-bedrock": { options: { region: "us-east-1" } } } } },
 )
 
+// FORK: a second Bedrock provider under its own id, so one AWS profile can serve a model the other cannot
+// reach. The loader is selected by SDK package, so it reads this provider's own profile and region.
+
+const secondBedrock = ProviderV2.ID.make("bedrock-far-asimov")
+
+const twoBedrockProviders = {
+  config: {
+    provider: {
+      "amazon-bedrock": { options: { profile: "primary", region: "us-east-1" } },
+      [secondBedrock]: {
+        npm: "@ai-sdk/amazon-bedrock",
+        options: { profile: "far-asimov", region: "eu-west-1" },
+        models: { "anthropic.claude-sonnet-4-5-20250929-v1:0": {} },
+      },
+    },
+  },
+}
+
+it.instance(
+  "Bedrock: a provider using the Bedrock npm package under another id gets its own credential provider",
+  () =>
+    Effect.gen(function* () {
+      yield* set("AWS_PROFILE", "")
+      yield* set("AWS_BEARER_TOKEN_BEDROCK", "")
+      const providers = yield* list
+      expect(providers[secondBedrock]).toBeDefined()
+      expect(typeof providers[secondBedrock].options?.credentialProvider).toBe("function")
+      expect(providers[secondBedrock].options?.region).toBe("eu-west-1")
+      expect(providers[secondBedrock].options?.profile).toBe("far-asimov")
+      // Pinned empty so a process-global AWS_BEARER_TOKEN_BEDROCK cannot outrank the credential chain.
+      expect(providers[secondBedrock].options?.apiKey).toBe("")
+      expect(providers[ProviderV2.ID.amazonBedrock].options?.region).toBe("us-east-1")
+      expect(providers[ProviderV2.ID.amazonBedrock].options?.profile).toBe("primary")
+    }),
+  twoBedrockProviders,
+)
+
+it.instance(
+  "Bedrock: a second Bedrock provider gets cross-region prefixes for its own region",
+  () =>
+    Effect.gen(function* () {
+      yield* set("AWS_PROFILE", "")
+      yield* set("AWS_BEARER_TOKEN_BEDROCK", "")
+      const model = yield* Provider.use.getModel(
+        secondBedrock,
+        ModelV2.ID.make("anthropic.claude-sonnet-4-5-20250929-v1:0"),
+      )
+      const language = yield* Provider.use.getLanguage(model)
+      expect((language as { modelId: string }).modelId).toBe("eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    }),
+  twoBedrockProviders,
+)
+
 // Cross-region inference profile prefix handling.
 // Models from models.dev may come with prefixes already (e.g. us., eu., global.).
 // These should NOT be double-prefixed when passed to the SDK.
