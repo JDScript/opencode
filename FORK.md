@@ -92,7 +92,7 @@ build the pre-rebase code. **Push before releasing.**
 
 ### Following upstream is automatic
 
-`.github/workflows/sync-fork.yml` runs every six hours and does, unattended, exactly what the manual
+`.github/workflows/sync-fork.yml` runs twice a day and does, unattended, exactly what the manual
 procedure below does: archive tag, fast-forward `dev`, rebase `jdscript`, typecheck, push, then dispatch
 `release-fork.yml`. The manual procedure is kept because it is what the workflow runs, and what you fall
 back to when it cannot.
@@ -101,8 +101,12 @@ It acts only when **upstream's version changes**, not on every upstream commit â
 dozens of times per release would fight any local work and produce releases nobody asked for. The test is
 the `version` field of `packages/opencode/package.json` on upstream `dev` versus on `jdscript`; that file
 is what upstream's "sync release versions" commit writes, and this fork never touches it, so it is the
-upstream version the trunk currently sits on. The check is two API reads with no checkout, which is why a
-six-hour schedule costs nothing.
+upstream version the trunk currently sits on. The check is two API reads with no checkout, so the schedule
+could be much tighter at no real cost; twelve hours is a choice, not a limit.
+
+One consequence worth knowing: a rebase done **by hand** is not released, because afterwards the versions
+already match and the next scheduled run sees nothing to do. Either let the workflow do the rebase, or
+follow a manual one with `gh workflow run sync-fork.yml -f force=true`.
 
 Three things it will refuse to do, and each fails the run with nothing pushed:
 
