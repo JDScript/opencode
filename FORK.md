@@ -55,8 +55,8 @@ upstream/dev  ──►  dev        pure mirror, fast-forward only, never edited
 
 ### Every upstream workflow is disabled in this fork
 
-All 26 of them, through `gh workflow disable` — a repository setting, so it costs no seam and survives every
-rebase. Only `release-fork.yml` is active.
+All of them, through `gh workflow disable` — a repository setting, so it costs no seam and survives every
+rebase. Only the two fork-only workflows, `sync-fork.yml` and `release-fork.yml`, are active.
 
 They had to go because a fork inherits them with write permissions and almost none of them check which
 repository they are in: of the seven scheduled workflows only `stats` has a guard, so `compliance-close` was
@@ -73,24 +73,64 @@ To check, after any rebase or any upstream change to `.github/workflows/`:
 
 ```sh
 gh workflow list --repo JDScript/opencode --json name,path,state \
-  --jq '.[] | select(.state=="active") | .path'   # must print only release-fork.yml
+  --jq '.[] | select(.state=="active") | .path'   # must print only sync-fork.yml and release-fork.yml
 ```
 
 A workflow file that upstream _adds_ later arrives enabled, which is why this is worth re-checking rather
-than assuming.
+than assuming. It has happened: `unlock.yml` arrived that way and was disabled by hand.
 
 ### Pushing `jdscript` triggers nothing — but releasing builds what GitHub has
 
 No workflow fires on a push to this branch. Every upstream workflow is either limited to
 `dev` / `production` / `beta` / `ci`, or triggered by a `github-v*` / `vscode-v*` **tag** (never created
-here), or `workflow_dispatch`-only — including `release-fork.yml`. So `jdscript` can be force-pushed
-after a rebase without side effects.
+here), or `workflow_dispatch`-only — including `release-fork.yml`; `sync-fork.yml` is schedule and
+dispatch only. So `jdscript` can be force-pushed after a rebase without side effects.
 
 The catch runs the other way: `release-fork.yml`'s build job checks out `git rev-parse HEAD` **of the
 dispatched ref on GitHub**, not anything local. A rebase that has not been pushed means a release would
 build the pre-rebase code. **Push before releasing.**
 
-### Rebasing onto a new upstream release
+### Following upstream is automatic
+
+`.github/workflows/sync-fork.yml` runs every six hours and does, unattended, exactly what the manual
+procedure below does: archive tag, fast-forward `dev`, rebase `jdscript`, typecheck, push, then dispatch
+`release-fork.yml`. The manual procedure is kept because it is what the workflow runs, and what you fall
+back to when it cannot.
+
+It acts only when **upstream's version changes**, not on every upstream commit — force-pushing the trunk
+dozens of times per release would fight any local work and produce releases nobody asked for. The test is
+the `version` field of `packages/opencode/package.json` on upstream `dev` versus on `jdscript`; that file
+is what upstream's "sync release versions" commit writes, and this fork never touches it, so it is the
+upstream version the trunk currently sits on. The check is two API reads with no checkout, which is why a
+six-hour schedule costs nothing.
+
+Three things it will refuse to do, and each fails the run with nothing pushed:
+
+- **Resolve a conflict.** `git rerere`'s cache is in the local `.git`; a runner has none. Rebase locally as
+  below — rerere replays anything seen before — push, and the next run finds nothing to do.
+- **Drop a patch.** `git rebase` silently omits a fork patch whose changes are already upstream. That is good
+  news, but the seam table in §3 is now wrong, so the run stops until someone removes the row and re-runs.
+- **Push a tree that does not typecheck.** The same `bun typecheck` the pre-push hook runs. Upstream's own CI
+  keeps `dev` green, so this is almost always upstream being briefly red; the next run retries.
+
+The force-push carries `--force-with-lease` against the commit the run started from, so a manual push that
+lands mid-run is never clobbered; the run fails instead and the next one starts from the new tip.
+
+Dispatching by hand takes two inputs. `force` syncs even when the version is unchanged — onto upstream's
+current tip if it moved, otherwise straight to the release — which is how to cut a release of the current
+trunk without opening `release-fork.yml`. `release=false` syncs without releasing.
+
+```sh
+gh workflow run sync-fork.yml -f force=true                  # release now, on whatever upstream has
+gh workflow run sync-fork.yml -f force=true -f release=false  # rebase only
+```
+
+Known edges: GitHub disables scheduled workflows in a public repository after 60 days without a commit. The
+workflow's own pushes count, so that only bites if upstream stops releasing for two months — re-enable with
+`gh workflow enable sync-fork.yml`. And the release is dispatched, not chained: a build failure shows up as a
+failed `release-fork` run, while the `sync-fork` run that pushed the rebase stays green.
+
+### Rebasing onto a new upstream release by hand
 
 ```sh
 git fetch upstream dev --tags
@@ -158,7 +198,7 @@ git grep -nE '(//|#) FORK' -- ':!FORK.md'
 
 Match the comment prefix, not the bare word: upstream's `patches/install-korean-ime-fix.sh` uses
 `FORK_REPO` for something unrelated. That command also matches the fork-only files that carry a `FORK`
-header (`mise.toml`, `.github/workflows/release-fork.yml`) — those are **not** seams, they do not exist
+header (`mise.toml`, `.github/workflows/sync-fork.yml`, `.github/workflows/release-fork.yml`) — those are **not** seams, they do not exist
 upstream and cannot conflict.
 
 | File                                                             | Seam                                                                            |
@@ -276,17 +316,19 @@ upstream and cannot conflict.
 
 Nothing enforces these; they are the only places one value lives twice.
 
-| Value            | Locations                                                                                                                        |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Fork GitHub repo | `REPO` in `packages/opencode/src/installation/fork.ts` · `GITHUB_REPO` in `install` (a shell script cannot import TS)            |
-| bun version      | `packageManager` in `package.json` · `mise.toml`. The release workflow reads it from `package.json`, so that one cannot drift.   |
-| Upstream repo    | the `git remote` named `upstream` · the URL in `release-fork.yml`'s upstream-base lookup (a workflow cannot read a local remote) |
+| Value            | Locations                                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fork GitHub repo | `REPO` in `packages/opencode/src/installation/fork.ts` · `GITHUB_REPO` in `install` (a shell script cannot import TS)                              |
+| bun version      | `packageManager` in `package.json` · `mise.toml`. The release workflow reads it from `package.json`, so that one cannot drift.                     |
+| Upstream repo    | the `git remote` named `upstream` · `anomalyco/opencode` in `sync-fork.yml` (twice) and `release-fork.yml` (a workflow cannot read a local remote) |
+| Trunk branch     | `jdscript` is hardcoded in `sync-fork.yml` as the checkout ref, the version-check ref, the push target and the release ref                         |
 
 ---
 
 ## 4. Releasing
 
-`.github/workflows/release-fork.yml`, run via **workflow_dispatch**. Nothing else is needed: upstream's
+`.github/workflows/release-fork.yml`, run via **workflow_dispatch** — normally by `sync-fork.yml` right
+after it pushes a rebase, or by hand for a release of the current trunk. Nothing else is needed: upstream's
 `publish.yml` is guarded by `if: github.repository == 'anomalyco/opencode'` and so does nothing in a
 fork — which is why it is left completely unmodified.
 
