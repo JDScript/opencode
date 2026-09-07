@@ -23,13 +23,14 @@ name: sync-fork
 
 on:
   schedule:
-    # Every six hours, at a minute chosen to avoid the top-of-hour rush when GitHub delays cron jobs.
-    # A no-op run costs seconds. Upstream releases roughly daily, so this bounds the lag at six hours.
+    # Twice a day, at a minute chosen to avoid the top-of-hour rush when GitHub delays cron jobs.
+    # Upstream releases roughly daily, so this bounds the lag at twelve hours; a no-op run costs seconds
+    # if that ever needs tightening.
     #
     # GitHub disables scheduled workflows in a public repository after 60 days without a commit. The
     # pushes this workflow makes count, so that only bites if upstream stops releasing for two months;
     # re-enable from the Actions tab (or `gh workflow enable sync-fork.yml`) if it does.
-    - cron: "17 */6 * * *"
+    - cron: "17 */12 * * *"
   workflow_dispatch:
     inputs:
       force:
