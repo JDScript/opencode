@@ -155,6 +155,9 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: linux-arm64
     runs-on: ${{ matrix.runner }}
+    # WEB_CHECKOUT_TOKEN lives in the `production` environment, not at repository level; environment
+    # secrets are only visible to jobs that declare the environment.
+    environment: production
     steps:
       - uses: actions/checkout@v4
         with:
