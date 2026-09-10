@@ -26,8 +26,14 @@ const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
-  const dist = path.join(appDir, "dist")
-  await $`OPENCODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
+  // FORK: an already-built static directory replaces packages/app when set (the fork's UI lives in ./web)
+  const prebuilt = process.env.OPENCODE_WEB_UI_DIST
+  const dist = prebuilt ?? path.join(appDir, "dist")
+  if (prebuilt && !(await Bun.file(path.join(prebuilt, "index.html")).exists())) {
+    throw new Error(`OPENCODE_WEB_UI_DIST=${prebuilt} has no index.html; build the web UI first`)
+  }
+  if (prebuilt) console.log(`Embedding prebuilt Web UI from ${prebuilt}`)
+  if (!prebuilt) await $`OPENCODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
     .map((file) => file.replaceAll("\\", "/"))
     .filter((file) => !file.endsWith(".map"))

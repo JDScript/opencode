@@ -9,3 +9,7 @@ bun = "1.3.14"
 # to gh inside the runner (where it is preinstalled). Pinned here so triggering a release does not
 # depend on whatever gh happens to be on PATH.
 gh = "latest"
+# The web UI submodule (./web) is a pnpm workspace on Node >= 24; `pnpm` must match its own
+# `packageManager` field (web/package.json) the same way bun must match ours.
+node = "24"
+pnpm = "11.24.0"

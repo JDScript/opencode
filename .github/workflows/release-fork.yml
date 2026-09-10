@@ -104,6 +104,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # The web UI is a submodule at ./web; its pinned commit is the gitlink in this tree, readable
+          # without initialising the submodule.
+          echo "web=$(git rev-parse HEAD:web)" >> "$GITHUB_OUTPUT"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VERSION (base $BASE, upstream $UPSTREAM)"
@@ -126,6 +129,7 @@ jobs:
             "- Upstream version: \`${{ steps.compute.outputs.base }}\`" \
             "- Upstream commit: \`${{ steps.compute.outputs.upstream }}\`" \
             "- Fork commit: \`${{ steps.compute.outputs.sha }}\`" \
+            "- Web UI commit: \`${{ steps.compute.outputs.web }}\` (JDScript/opencode-web)" \
             "" \
             "Exact source for this build: \`git checkout ${{ steps.compute.outputs.tag }}\`")
 
@@ -157,12 +161,32 @@ jobs:
           # The tag does not exist yet: a draft release only records its target commit. Check out that
           # commit directly so every matrix job builds identical source.
           ref: ${{ needs.version.outputs.sha }}
+          # ./web is a submodule of a private repository, and GITHUB_TOKEN can only read this one.
+          # WEB_CHECKOUT_TOKEN is a fine-grained PAT with contents:read on JDScript/opencode-web (and this
+          # repo, since checkout uses one token for both). The .gitmodules URL is relative, so it resolves
+          # against whatever origin checkout used and the token applies to it.
+          submodules: true
+          token: ${{ secrets.WEB_CHECKOUT_TOKEN || github.token }}
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ needs.version.outputs.bun }}
 
       - run: bun install
+
+      # The web UI is a pnpm workspace with its own lockfile; it is not part of this repo's bun workspace
+      # on purpose (see FORK.md §2). Built here, then handed to build.ts as a finished static directory.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build web UI
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
 
       - name: Build ${{ matrix.target }}
         working-directory: packages/opencode
@@ -172,6 +196,8 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           # MUST be `latest` — see the header.
           OPENCODE_CHANNEL: latest
+          # FORK seam in build.ts: embed this directory instead of building packages/app.
+          OPENCODE_WEB_UI_DIST: ${{ github.workspace }}/web/apps/spa/dist
           #
           # OPENCODE_RELEASE is deliberately NOT set. It is the only thing gating build.ts's archive and
           # upload block (script/build.ts:235), and that block cannot work with `--single`:
