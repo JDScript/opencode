@@ -1,8 +1,9 @@
 # Fork notes
 
 A fork of [anomalyco/opencode](https://github.com/anomalyco/opencode) that carries a few **server-side** patches
-for a separate client, and publishes its own binaries to this repository's GitHub Releases. The UI is not
-touched: the client that consumes these patches lives elsewhere.
+and ships a **different web UI** — [JDScript/opencode-web](https://github.com/JDScript/opencode-web), a Vite +
+React SPA pulled in as the `web/` submodule and embedded in the binary in place of `packages/app` — and
+publishes its own binaries to this repository's GitHub Releases. `packages/app` itself is not touched.
 
 The design goal that shapes every decision here: **stay rebasable onto upstream forever.** Upstream moves
 fast. So the rule is _new files plus the smallest possible seams_ — upstream files carry only a few
@@ -17,6 +18,7 @@ clearly-marked lines, every such line carries a `FORK` comment, and every seam i
 | **Tool-call argument streaming**    | `tool-input-delta` swallowed by the V1 processor; a client sees the call only whole | Each chunk published as a `message.part.delta` (`field: "raw"`) on the pending tool part, so a client can meter it                                                |
 | **Several Bedrock providers**       | Only the provider literally named `amazon-bedrock` got AWS credentials              | Every provider on the Bedrock SDK package resolves its own profile, region, endpoint and auth entry                                                               |
 | **Usage aggregation**               | Context-window fill for the current session only, read off its last message         | `GET /fork/usage`: cost, requests, five token classes and thinking time over the whole history, grouped by time bucket, session, project, model, agent or variant |
+| **Web UI**                          | `packages/app` (SolidJS) embedded in the binary                                     | `web/` submodule (opencode-web, Vite + React) embedded instead; `packages/app` still builds, is just not shipped                                                  |
 | **Releases and `opencode upgrade`** | Point at upstream                                                                   | Point at this repository; the fork follows upstream releases automatically                                                                                        |
 
 ### What used to be here
@@ -46,6 +48,43 @@ upstream/dev  ──►  dev         pure mirror, fast-forward only, never edite
   wanted again; do not rebase it.
 - `git rerere` is enabled, so a conflict resolved once is replayed automatically on later rebases.
 - `upstream`'s push URL is deliberately set to `DISABLED_DO_NOT_PUSH_TO_UPSTREAM`.
+
+### The web UI is a submodule at `web/`
+
+`web/` is [JDScript/opencode-web](https://github.com/JDScript/opencode-web) (private), pinned by commit like
+any submodule. Upstream has no `web/` and no `.gitmodules`, so neither can ever conflict, and bumping the UI is
+one gitlink commit that every rebase carries trivially:
+
+```sh
+git submodule update --remote web && git add web && git commit -m "chore(web): bump ui to $(git -C web rev-parse --short HEAD)"
+```
+
+Three placement decisions, each with a reason:
+
+- **Root `web/`, not `packages/web`.** The root `workspaces` glob is `packages/*`; anything under it becomes a
+  bun workspace member and its whole dependency tree lands in the root `bun.lock` — the file upstream churns
+  most and the worst conflict there is. At the root it is invisible to bun, to `bun turbo typecheck`, and to
+  upstream tooling; it keeps its own pnpm lockfile and its own toolchain.
+- **A relative URL in `.gitmodules` (`../opencode-web.git`).** It resolves against whatever the superproject's
+  origin is: `git@github.com:` locally, `https://github.com/` on a runner. One entry, no per-environment
+  rewriting, and the checkout action's token applies to it automatically.
+- **`build.ts` receives a finished directory, not a package to build.** The `OPENCODE_WEB_UI_DIST` seam points
+  the existing embed step at any static directory. The alternative — pointing `appDir` at `web/` — would have
+  taught upstream's build script about pnpm and a non-`dist/` output path. Building the UI is the release
+  workflow's job; `build.ts` only embeds.
+
+Why this UI slots in with **no server change**: `ui.ts` serves an embedded map by exact path and falls back to
+`index.html`; opencode-web routes by query string (`?server=&session=&view=`) and builds with `base: "./"`, so
+there are no path routes to fall through and every asset URL is relative. Its API base is `./` — same origin —
+which is exactly what the embedded case needs. The one contract it must honour is the CSP: `script-src` allows
+only `'self'` plus the hash of **one** inline script, the `<script id="oc-theme-preload-script">` that
+`cspForHtml` looks for. opencode-web's palette preload must carry that id or it is blocked; verified both ways
+against `cspForHtml` on the real build output.
+
+The private repository is the only operational cost: `release-fork.yml` checks the submodule out with
+`WEB_CHECKOUT_TOKEN`, a fine-grained PAT with `contents: read` on **both** repositories (the checkout action
+uses one token for the superproject and its submodules). Without the secret the build job fails at checkout,
+which is the right failure.
 
 ### Every upstream workflow is disabled in this fork
 
@@ -199,18 +238,19 @@ Match the comment prefix, not the bare word: upstream's `patches/install-korean-
 header (`mise.toml`, `.github/workflows/sync-fork.yml`, `.github/workflows/release-fork.yml`) and the two
 fork test fixtures — those are **not** seams, they do not exist upstream and cannot conflict.
 
-| File                                                             | Seam                                                                          |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`    |
-| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                      |
-| `packages/opencode/src/provider/provider.ts`                     | Selects the Bedrock credential loader by SDK package, not only by provider id |
-| `packages/opencode/src/session/processor.ts`                     | Publishes `tool-input-delta` as a `raw` PartDelta on the pending tool part    |
-| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkUsageApi` on `OpenCodeHttpApi`                                    |
-| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkUsageApiRoutes` layer, in `createRoutes`                                 |
+| File                                                             | Seam                                                                                |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`          |
+| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                            |
+| `packages/opencode/src/provider/provider.ts`                     | Selects the Bedrock credential loader by SDK package, not only by provider id       |
+| `packages/opencode/src/session/processor.ts`                     | Publishes `tool-input-delta` as a `raw` PartDelta on the pending tool part          |
+| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkUsageApi` on `OpenCodeHttpApi`                                          |
+| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkUsageApiRoutes` layer, in `createRoutes`                                       |
+| `packages/opencode/script/build.ts`                              | `OPENCODE_WEB_UI_DIST`: embed a prebuilt static directory instead of `packages/app` |
 
 Fork-only files that are not seams: `packages/opencode/src/installation/fork.ts`, the usage endpoint's
 `groups/fork-usage.ts` and `handlers/fork-usage.ts`, the two workflows,
-`mise.toml`, and the fork cases in `test/provider/amazon-bedrock.test.ts` and
+`mise.toml`, `.gitmodules` and the `web/` submodule, and the fork cases in `test/provider/amazon-bedrock.test.ts` and
 `test/session/processor-effect.test.ts` (marked `FORK`, appended to upstream's own files).
 
 ### Non-obvious choices worth keeping
@@ -304,6 +344,8 @@ Nothing enforces these; they are the only places one value lives twice.
 | bun version      | `packageManager` in `package.json` · `mise.toml`. The release workflow reads it from `package.json`, so that one cannot drift.                     |
 | Upstream repo    | the `git remote` named `upstream` · `anomalyco/opencode` in `sync-fork.yml` (twice) and `release-fork.yml` (a workflow cannot read a local remote) |
 | Trunk branch     | `jdscript` is hardcoded in `sync-fork.yml` as the checkout ref, the version-check ref, the push target and the release ref                         |
+| pnpm version     | `packageManager` in `web/package.json` · `mise.toml`. The release workflow reads it from `web/package.json`, so that one cannot drift.             |
+| Web UI dist path | `web/apps/spa/dist` in `release-fork.yml` and in §5 below; it is opencode-web's Vite output directory                                              |
 
 ---
 
@@ -367,6 +409,7 @@ bun is pinned in `mise.toml` (`mise install`), because `packages/script` throws 
 not match `packageManager`.
 
 ```sh
+git submodule update --init   # web/ — needs read access to JDScript/opencode-web
 mise install && bun install
 cd packages/opencode && bun run typecheck
 cd packages/opencode && bun test test/provider/amazon-bedrock.test.ts test/session/processor-effect.test.ts
@@ -374,6 +417,22 @@ cd packages/opencode && bun test test/provider/amazon-bedrock.test.ts test/sessi
 
 Both test files are upstream's with fork cases appended; the fork cases are marked `FORK` and were each
 confirmed to fail with their seam removed.
+
+**Building a binary with the fork's UI**, exactly as the release workflow does:
+
+```sh
+(cd web && pnpm install --frozen-lockfile && pnpm build)
+cd packages/opencode && OPENCODE_WEB_UI_DIST=$PWD/../../web/apps/spa/dist bun run ./script/build.ts --single
+./dist/opencode-*/bin/opencode serve --port 4096   # open http://localhost:4096
+```
+
+Without `OPENCODE_WEB_UI_DIST`, `build.ts` builds and embeds upstream's `packages/app` as before.
+
+**Developing the UI** is two processes, same as upstream's own workflow: `bun run ./src/index.ts serve --port 4096`
+in `packages/opencode`, and `pnpm dev` in `web/` (port 3000). In dev the SPA's default server is `./` — the
+Vite dev server itself — so point it at the backend with `VITE_OPENCODE_SERVERS='[{"url":"http://localhost:4096"}]'`
+or add the server from the UI. A plain `bun run src/index.ts serve` still proxies `app.opencode.ai` on `/`,
+since no UI is embedded outside a compiled binary.
 
 ---
 
@@ -389,5 +448,10 @@ confirmed to fail with their seam removed.
 - **An unwindowed usage query still scans `message`.** Every JSON field it sums lives in `data`, so no index
   can cover it; 118 MB and ~0.15 s warm on a real database, which is fine, but it grows with history. The
   `part` scan that actually hurt is gone (see §3).
+- **The UI does not follow upstream automatically.** `sync-fork.yml` rebases the fork and rebuilds whatever
+  `web/` is pinned to; a new opencode-web commit ships only after someone bumps the gitlink (§2) — and that,
+  being a fork commit rather than a rebase, needs `gh workflow run sync-fork.yml -f force=true` to release.
+- **`web/` needs access to a private repository.** Cloning the fork without it leaves `web/` empty; the
+  server-side patches, tests and typecheck are unaffected, only a binary build is not possible.
 - **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public
   repos; drop that matrix entry otherwise.
