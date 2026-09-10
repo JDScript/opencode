@@ -226,6 +226,32 @@ const fragmentFailureLLM = Layer.succeed(
 const fragmentFailureEnv = LayerNode.compile(root, [...replacements, [LLM.node, fragmentFailureLLM]])
 const itFragmentFailure = testEffect(fragmentFailureEnv)
 
+// FORK: the model writes a tool call's arguments in two chunks before the call itself arrives.
+const toolInputDeltaLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id: "call-1", name: "lookup" }),
+        LLMEvent.toolInputDelta({ id: "call-1", name: "lookup", text: '{"query":' }),
+        LLMEvent.toolInputDelta({ id: "call-1", name: "lookup", text: '"weather"}' }),
+        LLMEvent.toolInputEnd({ id: "call-1", name: "lookup" }),
+        LLMEvent.toolCall({ id: "call-1", name: "lookup", input: { query: "weather" }, providerExecuted: true }),
+        LLMEvent.toolResult({
+          id: "call-1",
+          name: "lookup",
+          result: { type: "text", value: "sunny" },
+          providerExecuted: true,
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const toolInputDeltaEnv = LayerNode.compile(root, [...replacements, [LLM.node, toolInputDeltaLLM]])
+const itToolInputDelta = testEffect(toolInputDeltaEnv)
+
 const boot = Effect.fn("test.boot")(function* () {
   const processors = yield* SessionProcessor.Service
   const session = yield* Session.Service
@@ -1165,6 +1191,61 @@ itFragmentFailure.live("session.processor effect tests retain partial legacy par
         expect(seen).toContain(MessageV2.Event.PartUpdated.type)
         expect(seen).toContain(Session.Event.Error.type)
         expect(seen.filter((type) => type.startsWith("session.next."))).toEqual([])
+      }),
+    { config: cfg },
+  ),
+)
+
+// FORK: tool-input-delta is forwarded as a `raw` PartDelta on the pending tool part. Upstream's V2 runner
+// already publishes these; this keeps the live V1 path in step so clients can meter argument generation.
+itToolInputDelta.live("session.processor effect tests publish tool input deltas on the pending tool part", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "tool input delta")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const deltas: { partID: string; field: string; delta: string }[] = []
+        const off = yield* events.listen((event) => {
+          if (event.type === MessageV2.Event.PartDelta.type) {
+            const data = event.data as { partID: string; field: string; delta: string }
+            deltas.push({ partID: data.partID, field: data.field, delta: data.delta })
+          }
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "tool input delta" }],
+          tools: {},
+        })
+        yield* off
+
+        const parts = yield* MessageV2.parts(msg.id)
+        const call = parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
+        expect(call).toBeDefined()
+        expect(deltas).toEqual([
+          { partID: call!.id, field: "raw", delta: '{"query":' },
+          { partID: call!.id, field: "raw", delta: '"weather"}' },
+        ])
+        // Publish only: the stored part is whatever the tool-call event produced, not the concatenated deltas.
+        expect(call?.state.status).not.toBe("pending")
       }),
     { config: cfg },
   ),

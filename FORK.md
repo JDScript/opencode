@@ -219,6 +219,7 @@ upstream and cannot conflict.
 | `packages/app/src/components/prompt-input-v2.tsx`                | Fills it (TPS, scanner, context usage), exposes `sessionId`, registers `/usage` |
 | `packages/app/src/pages/home/home-projects-view.tsx`             | Usage button in `HomeUtilityNav`, above settings and help                       |
 | `packages/opencode/src/provider/provider.ts`                     | Selects the Bedrock credential loader by SDK package, not only by provider id   |
+| `packages/opencode/src/session/processor.ts`                     | Publishes `tool-input-delta` as a `raw` PartDelta on the pending tool part      |
 
 ### Non-obvious choices worth keeping
 
@@ -272,6 +273,21 @@ upstream and cannot conflict.
   Upstreamable as-is. Upstream's own V2 stack already gates on the package in
   `packages/core/src/plugin/provider/amazon-bedrock.ts`, so this only brings the live V1 path in line; drop it
   if V1 is retired or upstream backports that gate.
+
+- **Tool argument deltas are published, not stored.** Upstream's V1 `processor.ts` swallows `tool-input-delta`
+  (it only makes sure the pending part exists), so a client cannot show the model writing a call, or meter it.
+  The seam forwards each chunk as a `message.part.delta` with `field: "raw"` on the pending tool part — the
+  field that state already carries as `""` — through `session.updatePartDelta`, which only publishes; nothing
+  is persisted and `raw` is still filled in whole when `tool-call` arrives. Upstream's V2 runner
+  (`packages/core/src/session/runner/publish-llm-event.ts`) already publishes the equivalent
+  `Tool.Input.Delta`, so this only brings V1 in step; drop it when V1 is retired.
+
+  Every existing consumer of `message.part.delta` was checked. The generic reducers in the app, TUI and
+  `server-session` apply `part[field] += delta` at the top level, so for a few milliseconds a tool part in
+  their stores carries a stray top-level `raw` string (the schema's is `state.raw`); nothing reads it, and
+  the `message.part.updated` that follows `tool-call` replaces the part and clears the accumulator. ACP and the
+  `run` CLI filter on part type or `field === "text"` and ignore it; `fork-tps.tsx` counts only text and
+  reasoning parts. A client that wants the meter reads the `raw` deltas itself.
 
 - **The live TPS meter reads the sync store, not the SSE stream.** The TUI plugin it is ported from
   (`opencode-tps`, MIT — its README says the web UI cannot run it) subscribes to `message.part.delta`. There is
