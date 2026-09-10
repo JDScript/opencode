@@ -1,0 +1,4 @@
+[submodule "web"]
+	path = web
+	url = ../opencode-web.git
+	branch = main
