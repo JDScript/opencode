@@ -82,7 +82,7 @@ only `'self'` plus the hash of **one** inline script, the `<script id="oc-theme-
 against `cspForHtml` on the real build output.
 
 The private repository is the only operational cost: `release-fork.yml` checks the submodule out with
-`WEB_CHECKOUT_TOKEN`, a fine-grained PAT with `contents: read` on **both** repositories (the checkout action
+`WEB_CHECKOUT_TOKEN`, a fine-grained PAT with `contents: read` on **both** repositories, stored in the `production` environment (so the build job declares `environment: production`) (the checkout action
 uses one token for the superproject and its submodules). Without the secret the build job fails at checkout,
 which is the right failure.
 
