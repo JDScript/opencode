@@ -12,17 +12,19 @@ clearly-marked lines, every such line carries a `FORK` comment, and every seam i
 
 ## 1. What changed, functionally
 
-|                                     | Before                                                                              | After                                                                                                              |
-| ----------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Tool-call argument streaming**    | `tool-input-delta` swallowed by the V1 processor; a client sees the call only whole | Each chunk published as a `message.part.delta` (`field: "raw"`) on the pending tool part, so a client can meter it |
-| **Several Bedrock providers**       | Only the provider literally named `amazon-bedrock` got AWS credentials              | Every provider on the Bedrock SDK package resolves its own profile, region, endpoint and auth entry                |
-| **Releases and `opencode upgrade`** | Point at upstream                                                                   | Point at this repository; the fork follows upstream releases automatically                                         |
+|                                     | Before                                                                              | After                                                                                                                                                             |
+| ----------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tool-call argument streaming**    | `tool-input-delta` swallowed by the V1 processor; a client sees the call only whole | Each chunk published as a `message.part.delta` (`field: "raw"`) on the pending tool part, so a client can meter it                                                |
+| **Several Bedrock providers**       | Only the provider literally named `amazon-bedrock` got AWS credentials              | Every provider on the Bedrock SDK package resolves its own profile, region, endpoint and auth entry                                                               |
+| **Usage aggregation**               | Context-window fill for the current session only, read off its last message         | `GET /fork/usage`: cost, requests, five token classes and thinking time over the whole history, grouped by time bucket, session, project, model, agent or variant |
+| **Releases and `opencode upgrade`** | Point at upstream                                                                   | Point at this repository; the fork follows upstream releases automatically                                                                                        |
 
 ### What used to be here
 
 An earlier incarnation of this fork also carried a web-UI config editor, a usage dashboard, a live TPS meter,
-server-seeded sidebar projects and fork-local i18n, plus the `/fork/config` and `/fork/usage` endpoints behind
-them. All of it was retired when the UI work moved to a separate client. It is preserved, with its own
+server-seeded sidebar projects and fork-local i18n, plus the `/fork/config` endpoint behind the editor. All of
+it was retired when the UI work moved to a separate client; `/fork/usage` came back afterwards, because that
+client wants the same numbers and the aggregation belongs next to the database. It is preserved, with its own
 FORK.md, on the **`deprecated`** branch — frozen at `104681add5` on upstream `1.18.29`
 (`57ef382843`) — and in every release tag cut before that point. Nothing on `jdscript` depends on it.
 
@@ -197,14 +199,17 @@ Match the comment prefix, not the bare word: upstream's `patches/install-korean-
 header (`mise.toml`, `.github/workflows/sync-fork.yml`, `.github/workflows/release-fork.yml`) and the two
 fork test fixtures — those are **not** seams, they do not exist upstream and cannot conflict.
 
-| File                                          | Seam                                                                          |
-| --------------------------------------------- | ----------------------------------------------------------------------------- |
-| `packages/opencode/src/installation/index.ts` | Fork release/install URLs, plus the fork-build short circuit in `latest()`    |
-| `install`                                     | `GITHUB_REPO` variable replacing hardcoded download URLs                      |
-| `packages/opencode/src/provider/provider.ts`  | Selects the Bedrock credential loader by SDK package, not only by provider id |
-| `packages/opencode/src/session/processor.ts`  | Publishes `tool-input-delta` as a `raw` PartDelta on the pending tool part    |
+| File                                                             | Seam                                                                          |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `packages/opencode/src/installation/index.ts`                    | Fork release/install URLs, plus the fork-build short circuit in `latest()`    |
+| `install`                                                        | `GITHUB_REPO` variable replacing hardcoded download URLs                      |
+| `packages/opencode/src/provider/provider.ts`                     | Selects the Bedrock credential loader by SDK package, not only by provider id |
+| `packages/opencode/src/session/processor.ts`                     | Publishes `tool-input-delta` as a `raw` PartDelta on the pending tool part    |
+| `packages/opencode/src/server/routes/instance/httpapi/api.ts`    | Mounts `ForkUsageApi` on `OpenCodeHttpApi`                                    |
+| `packages/opencode/src/server/routes/instance/httpapi/server.ts` | `forkUsageApiRoutes` layer, in `createRoutes`                                 |
 
-Fork-only files that are not seams: `packages/opencode/src/installation/fork.ts`, the two workflows,
+Fork-only files that are not seams: `packages/opencode/src/installation/fork.ts`, the usage endpoint's
+`groups/fork-usage.ts` and `handlers/fork-usage.ts`, the two workflows,
 `mise.toml`, and the fork cases in `test/provider/amazon-bedrock.test.ts` and
 `test/session/processor-effect.test.ts` (marked `FORK`, appended to upstream's own files).
 
@@ -247,6 +252,47 @@ Fork-only files that are not seams: `packages/opencode/src/installation/fork.ts`
   their stores carries a stray top-level `raw` string (the schema's is `state.raw`); nothing reads it, and
   the `message.part.updated` that follows `tool-call` replaces the part and clears the accumulator. ACP and the
   `run` CLI filter on part type or `field === "text"` and ignore it. A client that wants the meter reads the `raw` deltas itself.
+
+- **`ForkUsageApi` is mounted standalone, not added to `RootHttpApi`.** Adding a group to `RootHttpApi`
+  changes its requirement set, which breaks `test/server/httpapi-global.test.ts` and
+  `test/server/httpapi-control-plane.test.ts` — both build `HttpApiBuilder.layer(RootHttpApi)` with a fixed
+  handler list. Mounting standalone (like `EventApi`) keeps those files untouched. **If a rebase ever makes
+  those tests fail with `ApiGroup<"opencode-root", "forkUsage"> is not assignable to never`, the seam has
+  drifted back into `RootHttpApi`.** It needs auth only: `Database.Service` comes from the app-level layer
+  group, and the endpoint reads the whole database, so no workspace routing or instance context.
+- **The usage endpoint takes a bucket _duration_ and an alignment _origin_, never a calendar unit.** So the
+  server holds no timezone knowledge: grouping is `(ts - originMs) / bucketMs`. The client computes
+  `originMs` with its own tzdata, which SQLite does not have — `date(ts, 'unixepoch', 'Asia/Shanghai')`
+  returns NULL, so the only server-side alternative is a fixed offset that misplaces spend across DST. It
+  also lets the day boundary move off midnight, which matters here: 75% of one history's spend fell in the
+  00:00–03:00 hours local, so a calendar day splits one night's work across two columns. A day is therefore
+  never requested as a day: the client asks for hours and folds them itself, since a fixed 86400000 is not
+  a local day across a DST change.
+- **Usage reads both message tables and normalizes them.** v1 writes `message`, durable v2 sessions write
+  `session_message`, and neither is authoritative alone — on a real installation `session_message` is empty
+  and every message is in `message`. `UNION ALL` is correct either way with no flag detection, since a
+  session lives in exactly one. Three shape differences would each silently yield nulls if crossed: `role`
+  is inside the JSON in v1 but a column in v2, the model is flat in v1 and nested in v2, and v2's
+  `Model.Ref` names it `id`, not `modelID`.
+- **Usage aggregates per message, not from the `step-finish` parts that maintain the session totals.** Both
+  reconcile exactly — $204.0577 three ways on real data — but only messages carry the model, agent and
+  variant. Grouping by session also returns `parentSessionID` so the client can roll sub-agent spend up or
+  leave it flat; sub-sessions held 31% of all spend, so both readings are needed and the endpoint takes no
+  position.
+- **Usage creates two indexes at runtime, not through a migration.** Without them the reasoning-time
+  subquery is a full scan of `part`, and the cost is I/O, not JSON: `data` sits in overflow pages, tool
+  outputs are 577 MB of its 755 MB, and `json_extract(data, '$.type')` must read every one to learn it is
+  not reasoning. Measured: 5.9 s per request on a 31k-message database; 0.2 s with the indexes; results
+  identical across all 186 hourly buckets. `fork_part_reasoning_time_idx` is a partial covering index over
+  the 30k reasoning parts (1.6 MB), `fork_message_time_created_idx` makes a windowed query a range read
+  (0.4 MB). They are `CREATE INDEX IF NOT EXISTS` on every usage request because the migration list is
+  upstream's file and the worst possible conflict; Drizzle replays journal entries and never diffs the live
+  schema, so it cannot notice them, and when they exist the statement compiles to a no-op in a read
+  transaction (verified against a read-only connection). Two things to know: the **partial index's
+  predicate must stay byte-identical** to the subquery's `WHERE`, literals and all, or SQLite silently
+  stops using it and the 5.9 s comes back; and the **first request on a large database pays the build**
+  (~6–8 s holding the write lock, so a concurrently streaming session waits on the 5 s `busy_timeout`
+  and could see `SQLITE_BUSY`) — once per database, then never again.
 
 ### Duplications that must be kept in step
 
@@ -336,5 +382,12 @@ confirmed to fail with their seam removed.
 - **Tool argument deltas are visible only to a live subscriber.** They are published, never stored, so a
   client that connects mid-call sees `raw: ""` until the `tool-call` event fills it. That is the same
   trade-off `reasoning-delta` already makes, and it is what keeps the seam to one call.
+- **Usage covers this fork's own database only.** It reports what opencode recorded, so it will never agree
+  with a provider's dashboard or with what another client spent on the same account.
+- **A free model reporting `cost: 0` is indistinguishable from no cost.** The figures are what the provider
+  reported per message; a model with no pricing data contributes zero and its tokens still count.
+- **An unwindowed usage query still scans `message`.** Every JSON field it sums lives in `data`, so no index
+  can cover it; 118 MB and ~0.15 s warm on a real database, which is fine, but it grows with history. The
+  `part` scan that actually hurt is gone (see §3).
 - **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public
   repos; drop that matrix entry otherwise.

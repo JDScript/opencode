@@ -46,6 +46,43 @@ type AggregateRow = {
 
 const isDimension = (value: string): value is UsageDimension => (UsageDimensions as readonly string[]).includes(value)
 
+/**
+ * Two fork-owned indexes, created on first use rather than through a migration.
+ *
+ * Without them the reasoning subquery in `normalizedMessages` is a full scan of `part`, and the cost is
+ * not the JSON parsing but the I/O: `data` lives in overflow pages, tool outputs dominate it (577 MB of
+ * 755 MB on a real database), and `json_extract(data, '$.type')` has to pull every one of them in to
+ * learn it is not a reasoning part. Measured at 5–7 s cold and 1.2 s warm for 157k parts; the whole
+ * usage query was 5.9 s. The partial covering index below holds only the 30k reasoning parts and every
+ * column the subquery reads, so the subquery never touches the table: 5 ms, and the whole query 1.07 s
+ * cold, 0.15 s warm. It is 1.6 MB. The `message` index is what turns a windowed query from a scan of
+ * the whole table into a range read; 0.4 MB.
+ *
+ * Runtime `CREATE INDEX IF NOT EXISTS` instead of a migration because the migration list is upstream's
+ * file and the worst possible rebase conflict. Drizzle applies journal entries and never diffs the live
+ * schema, so an extra index is invisible to it; a fork-prefixed name cannot collide; and if upstream ever
+ * rebuilds or drops `part`, the index goes with it and is simply recreated here. When the index already
+ * exists the statement compiles to a no-op inside a read transaction — verified against a read-only
+ * connection — so this is safe to run on every request and needs no caching or "done" flag.
+ *
+ * The one real cost is the first build on a large database: ~6 s holding the write lock, during which
+ * a session streaming parts waits on `busy_timeout` (5 s) and could see SQLITE_BUSY. That is the same
+ * 6 s the query itself used to spend on every request, paid once; a fresh install pays nothing.
+ *
+ * The predicate text must stay byte-identical between the index and the query, or SQLite will not
+ * match the partial index — which is why the JSON paths are literals in both and never parameters.
+ */
+const ensureIndexes = (db: Effect.Success<typeof Database.Service>["db"]) =>
+  Effect.gen(function* () {
+    yield* db.run(
+      "CREATE INDEX IF NOT EXISTS fork_part_reasoning_time_idx ON part (message_id, json_extract(data, '$.time.start'), json_extract(data, '$.time.end')) WHERE json_extract(data, '$.type') = 'reasoning'",
+    )
+    yield* db.run("CREATE INDEX IF NOT EXISTS fork_message_time_created_idx ON message (time_created)")
+  }).pipe(
+    // Never fail the request over an index: the query is correct without them, only slower.
+    Effect.catchCause((cause) => Effect.logWarning("fork usage: could not create indexes", cause)),
+  )
+
 /** `undefined` means an unknown dimension was named, which the caller turns into a 400. */
 function parseDimensions(raw: string | undefined): UsageDimension[] | undefined {
   if (raw === undefined || raw.trim() === "") return []
@@ -72,8 +109,9 @@ function parseDimensions(raw: string | undefined): UsageDimension[] | undefined 
  * `$.providerID`) in v1 and nested in v2; and v2's `Model.Ref` names the model `id`, not `modelID`.
  *
  * `time_created` is a column on both, so it is read from there rather than from the JSON — that is also
- * what v2's standalone `time_created` index covers. v1's only time index leads with `session_id`, so an
- * unfiltered range there is a scan; measured at 9ms across 1105 rows.
+ * what v2's standalone `time_created` index covers. v1's own time index leads with `session_id`, so the
+ * fork adds a plain one (see `ensureIndexes`); an unwindowed query is still a scan of `message`, which is
+ * inherent and cheap next to `part` (118 MB vs 755 MB on a real database).
  *
  * Usage is read per message, not from the `step-finish` parts that `applyUsage` maintains the session
  * totals from. Both reconcile exactly ($204.0577 three ways on real data: session columns, message sum,
@@ -87,8 +125,10 @@ function normalizedMessages(from: number | undefined, to: number | undefined) {
     return parts
   }
 
-  const v1 = sql.join([sql`json_extract(m.data, '$.role') = 'assistant'`, ...bounds(sql`m.time_created`)], sql` AND `)
-  const v2 = sql.join([sql`sm.type = 'assistant'`, ...bounds(sql`sm.time_created`)], sql` AND `)
+  // Bounds first: SQLite evaluates WHERE terms left to right, and the column comparison rejects a row
+  // before `json_extract` has to read its `data` overflow pages. Halves a windowed message scan.
+  const v1 = sql.join([...bounds(sql`m.time_created`), sql`json_extract(m.data, '$.role') = 'assistant'`], sql` AND `)
+  const v2 = sql.join([...bounds(sql`sm.time_created`), sql`sm.type = 'assistant'`], sql` AND `)
 
   return sql`
     SELECT
@@ -108,7 +148,8 @@ function normalizedMessages(from: number | undefined, to: number | undefined) {
     FROM message m
     LEFT JOIN (
       -- Pre-aggregated rather than joined row-by-row: a direct join to \`part\` would multiply every
-      -- message by its reasoning blocks and inflate every token sum with it.
+      -- message by its reasoning blocks and inflate every token sum with it. Served entirely from
+      -- fork_part_reasoning_time_idx; the WHERE below is the index's own predicate, verbatim.
       SELECT
         message_id,
         SUM(json_extract(data, '$.time.end') - json_extract(data, '$.time.start')) AS ms
@@ -171,6 +212,8 @@ export const forkUsageHandlers = HttpApiBuilder.group(ForkUsageApi, "forkUsage",
       const params = ctx.query
       const dimensions = parseDimensions(params.groupBy)
       if (!dimensions) return yield* new HttpApiError.BadRequest({})
+
+      yield* ensureIndexes(db)
 
       const originMs = params.originMs ?? 0
       const bucketMs = params.bucketMs
