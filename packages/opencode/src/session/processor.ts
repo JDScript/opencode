@@ -319,9 +319,19 @@ const layer = Layer.effect(
             yield* ensureToolCall(value)
             return
 
-          case "tool-input-delta":
-            yield* ensureToolCall(value)
+          case "tool-input-delta": {
+            const { part } = yield* ensureToolCall(value)
+            // FORK: publish argument deltas so clients can show the model writing a call. Publish only,
+            // like reasoning-delta: `raw` is filled in whole when the tool-call event arrives.
+            yield* session.updatePartDelta({
+              sessionID: part.sessionID,
+              messageID: part.messageID,
+              partID: part.id,
+              field: "raw",
+              delta: value.text,
+            })
             return
+          }
 
           case "tool-input-end": {
             yield* ensureToolCall(value)
