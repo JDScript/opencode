@@ -242,17 +242,28 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       }),
     true,
   )
-  const toolInput = fragments("tool input", (id, value) =>
-    Effect.gen(function* () {
-      const tool = tools.get(id)
-      if (!tool) return yield* Effect.die(new Error(`Tool input end before start: ${id}`))
-      yield* bus.publish(SessionEvent.Tool.Input.Ended, {
+  const toolInput = fragments(
+    "tool input",
+    (id, value) =>
+      Effect.gen(function* () {
+        const tool = tools.get(id)
+        if (!tool) return yield* Effect.die(new Error(`Tool input end before start: ${id}`))
+        yield* bus.publish(SessionEvent.Tool.Input.Ended, {
+          sessionID: input.sessionID,
+          assistantMessageID,
+          id,
+          text: value,
+        })
+      }),
+    // Batched like text and reasoning deltas; the schema and manifest already declare the event, only the
+    // publisher was missing, so clients could not meter argument generation the way they meter text.
+    (id, value) =>
+      bus.publish(SessionEvent.Tool.Input.Delta, {
         sessionID: input.sessionID,
         assistantMessageID,
         id,
-        text: value,
-      })
-    }),
+        delta: value,
+      }),
   )
 
   const flushFragments = Effect.fnUntraced(function* () {
