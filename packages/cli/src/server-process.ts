@@ -71,13 +71,22 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
+      // FORK: an explicitly empty password (OPENCODE_PASSWORD= for standalone, `service set password ""`)
+      // disables authentication instead of being replaced by a random one. ServerAuth.required() already
+      // treats "" as no auth; only this fallback stood in the way. For a loopback-only server behind
+      // trusted clients. Read from process.env directly because Config.redacted reports an empty
+      // variable as absent, which is exactly the case this distinguishes.
+      const emptyEnvironmentPassword =
+        process.env.OPENCODE_PASSWORD === "" || process.env.OPENCODE_SERVER_PASSWORD === ""
       const password =
         options.mode === "service"
-          ? config.password || randomBytes(32).toString("base64url")
+          ? (config.password ?? randomBytes(32).toString("base64url"))
           : environmentPassword
             ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
+            : emptyEnvironmentPassword
+              ? ""
+              : randomBytes(32).toString("base64url")
+      if (password === "") yield* Effect.logWarning("server authentication disabled by empty password")
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
       const server = yield* start(
@@ -125,7 +134,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           : {
               onListen: (address, shutdown) =>
                 Effect.gen(function* () {
-                  if (!config.password) yield* ServiceConfig.password(password)
+                  if (config.password === undefined) yield* ServiceConfig.password(password)
                   return yield* ServiceRegistration.register({
                     address,
                     password,
