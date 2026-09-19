@@ -106,6 +106,28 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
   `~/.opencode/bin/opencode`, so an `opencode-v2` install reports "installation method not found" for
   self-update — acceptable until the updater seam exists.
 
+- **The V1 → V2 migration waits for the user.** Upstream forks `V1Migration.layer` at server start, so a
+  V2 build opening a V1 `opencode.db` migrates it before anyone can object: `event` is cleared, V1 sessions
+  are copied into `session_v2`/`session_message`, and V1 tables are never read again. The fork removes that
+  fork from `routes.ts` and exposes the same work behind an acknowledgement in `fork-migration.ts`:
+  `GET /api/fork/migration/v1` reports what would happen (legacy row counts, database size, where the backup
+  goes); `POST /api/fork/migration/v1` `{ backup?: boolean }` runs **backup → migrate → VACUUM** in the
+  background and the GET then reports phase and results, persisted in kv `fork.migration.v1` so they survive
+  restarts. Upstream's `GET /api/experimental/migration/v1` keeps saying `required` until then — its TUI
+  overlay shows nothing for that state, so the TUI simply has no history until the user acknowledges
+  from the web UI. Three measured facts shaped it (9.4 GB database, 647 sessions, 41k messages, 774k events):
+  - **Backup is `VACUUM INTO`, not a file copy.** Consistent regardless of WAL state or concurrent writes,
+    no filesystem support needed, but a full write of the live data: 100 s and 8.7 GB beside the database.
+    The pre-flight GET reports size and destination so the client can say so before the user clicks.
+  - **VACUUM afterwards is where the space comes back.** Migration itself freed nothing on disk; VACUUM took
+    38 s and went 8.8 GB → 2.1 GB. A failed VACUUM is logged into the record, not fatal.
+  - **The `event` delete is scoped to V1 aggregates.** Upstream deletes the whole table, safe only because
+    it runs before any V2 session exists; with a deferred migration, V2 sessions created meanwhile would
+    lose their events. The CLI does not persist durable events by default (`Bus.configured({ persist })` is
+    off outside workerd), so this only matters for persisting deployments — but it is data loss there.
+    Whole run: 165 s on that database, idempotent POST once started or done, verified that a V2 session
+    created before acknowledging survives with its title.
+
 ### Duplications that must be kept in step
 
 | Value            | Locations                                                                                                |

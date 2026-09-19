@@ -484,24 +484,25 @@ export function status(): Effect.Effect<Status, never, Database.Service> {
   })
 }
 
-export const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    runtimeState = { status: "running", progress: { label: "Clearing old events" } }
-    yield* run().pipe(
-      Effect.matchCauseEffect({
-        onFailure: (cause) =>
-          Effect.sync(() => {
-            runtimeState = { status: "error", error: errorText(Cause.squash(cause)) }
-          }).pipe(Effect.andThen(Effect.logError("V1 migration failed", { cause }))),
-        onSuccess: () =>
-          Effect.sync(() => {
-            runtimeState = { status: "idle" }
-          }),
-      }),
-      Effect.forkScoped({ startImmediately: true }),
-    )
-  }),
-)
+// FORK: exported so the fork's acknowledge endpoint can run what `layer` used to start on its own. Same
+// body; only the fork moved from around it to the two call sites.
+export const start = Effect.gen(function* () {
+  runtimeState = { status: "running", progress: { label: "Clearing old events" } }
+  yield* run().pipe(
+    Effect.matchCauseEffect({
+      onFailure: (cause) =>
+        Effect.sync(() => {
+          runtimeState = { status: "error", error: errorText(Cause.squash(cause)) }
+        }).pipe(Effect.andThen(Effect.logError("V1 migration failed", { cause }))),
+      onSuccess: () =>
+        Effect.sync(() => {
+          runtimeState = { status: "idle" }
+        }),
+    }),
+  )
+})
+
+export const layer = Layer.effectDiscard(start.pipe(Effect.forkScoped({ startImmediately: true })))
 
 function errorText(input: unknown): string {
   if (!(input instanceof Error)) return String(input)
@@ -531,9 +532,16 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
           .transaction((tx) =>
             Effect.gen(function* () {
               while (true) {
+                // FORK: only V1 sessions' events. Upstream clears the whole table, which is safe only because
+                // it migrates before any V2 session can exist; the fork waits for the user to acknowledge, and
+                // V2 sessions created meanwhile keep their events (V2's source of truth) intact.
                 yield* tx.run(sql`
                     DELETE FROM event
-                    WHERE rowid IN (SELECT rowid FROM event LIMIT ${EVENT_DELETE_BATCH_SIZE})
+                    WHERE rowid IN (
+                      SELECT rowid FROM event
+                      WHERE aggregate_id IN (SELECT id FROM session)
+                      LIMIT ${EVENT_DELETE_BATCH_SIZE}
+                    )
                   `)
                 const deleted = (yield* tx.get<{ value: number }>(sql`SELECT changes() AS value`))?.value ?? 0
                 if (deleted < EVENT_DELETE_BATCH_SIZE) break

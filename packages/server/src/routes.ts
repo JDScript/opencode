@@ -1,5 +1,4 @@
 import { Database } from "@opencode/core/database/database"
-import { V1Migration } from "@opencode/core/database/v1-migration"
 import { App } from "@opencode/core/app"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Node } from "@opencode/util/effect/app-node"
@@ -46,6 +45,7 @@ import { layer } from "./location"
 import { formLocationLayer } from "./middleware/form-location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { ServerInfo } from "./server-info"
+import { forkMigrationApiLayer } from "./fork-migration" // FORK
 import type { ServerOptions } from "./options"
 
 const applicationServiceNodes = [
@@ -179,11 +179,22 @@ function makeRoutes<AuthError, AuthServices>(
         Layer.provide(authorizationLayer),
         Layer.provide(schemaErrorLayer),
         Layer.provide(auth),
+        // FORK: the fork's own HttpApi, on the same router so it shares auth and request services.
+        Layer.merge(
+          forkMigrationApiLayer.pipe(
+            Layer.provide(services),
+            Layer.provide(authorizationLayer),
+            Layer.provide(schemaErrorLayer),
+            Layer.provide(auth),
+          ),
+        ),
         HttpRouter.provideRequest(requestServices),
         Layer.provideMerge(services),
         Layer.provideMerge(HttpRouter.layer),
       )
-      return Layer.merge(api, V1Migration.layer.pipe(Layer.provide(services)))
+      // FORK: upstream merges `V1Migration.layer` here, which migrates a V1 database on first start. The
+      // fork waits for the user to acknowledge via POST /api/fork/migration/v1 (see fork-migration.ts).
+      return api
     }),
   )
 }
