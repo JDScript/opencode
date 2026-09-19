@@ -21,12 +21,11 @@
 #      (services/updater-action.ts) rejects anything else, and two releases sharing a version string are
 #      considered the same release.
 #
-# v2 releases are published as PRERELEASES, on purpose and for now. This repository also hosts the v1
-# fork's releases, and the v1 build's `opencode upgrade` (packages/opencode/src/installation/fork.ts on
-# `jdscript`) reads `/releases/latest`, which GitHub defines as the newest non-prerelease. A v2 release
-# marked latest would be installed over every v1 user's binary on their next upgrade check. The v2 install
-# script and updater therefore never use `/releases/latest`; they list releases and take the newest `v2.`
-# tag. Flip `--prerelease` off, and the verify step, once the v1 line is retired.
+# v2 releases are the repository's `latest`. The v1 fork's `opencode upgrade` (installation/fork.ts on
+# `jdscript`) reads `/releases/latest`, so from the first v2 release every v1 user is upgraded to v2 on
+# their next check and their `opencode.db` is migrated on first start — upstream's automatic, irreversible
+# migration (see FORK.md §5). That is the intended cut-over; v1 is in maintenance. Until 2026-09-19 v2
+# releases were prereleases precisely to prevent this while the web UI was not ready.
 #
 # The release is created as a draft and only published once all builds succeeded, so a failed build
 # cannot leave a published release with missing assets.
@@ -222,16 +221,15 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
       - name: Publish release
-        # Prerelease, not latest — see the header. `--latest=false` so GitHub does not promote it either.
-        run: gh release edit "$TAG" --draft=false --prerelease --latest=false --repo '${{ github.repository }}'
+        run: gh release edit "$TAG" --draft=false --latest --repo '${{ github.repository }}'
 
-      - name: Verify the release is reachable the way the v2 install script reads it
+      - name: Verify the release is reachable by install-v2 and by the v1 upgrade path
         run: |
           set -euo pipefail
           STATE=$(gh release view "$TAG" --repo '${{ github.repository }}' --json isDraft,isPrerelease,assets)
           echo "$STATE"
           [ "$(jq -r '.isDraft' <<<"$STATE")" = "false" ] || { echo "::error::Release is still a draft."; exit 1; }
-          [ "$(jq -r '.isPrerelease' <<<"$STATE")" = "true" ] || { echo "::error::Release is not a prerelease; it would hijack v1 upgrades."; exit 1; }
+          [ "$(jq -r '.isPrerelease' <<<"$STATE")" = "false" ] || { echo "::error::Release is marked prerelease; /releases/latest will not return it."; exit 1; }
           COUNT=$(jq -r '[.assets[] | select(.name | test("^opencode-"))] | length' <<<"$STATE")
           [ "$COUNT" -ge 3 ] || { echo "::error::Expected 3 binary assets, found $COUNT."; exit 1; }
           # What install-v2 and the updater read: the Atom feed's newest v2.* title. The feed is cached for
@@ -243,7 +241,7 @@ jobs:
           done
           echo "newest v2 release → $NEWEST"
           [ "$NEWEST" = "$TAG" ] || { echo "::error::Newest v2 release is $NEWEST, expected $TAG."; exit 1; }
-          # And the v1 line must be untouched.
+          # What the v1 fork's upgrade reads: this must now be the v2 release.
           LATEST=$(gh api 'repos/${{ github.repository }}/releases/latest' --jq '.tag_name')
-          echo "releases/latest (v1) → $LATEST"
-          case "$LATEST" in v1.*) ;; *) echo "::error::releases/latest is $LATEST; v1 upgrades would now install v2."; exit 1 ;; esac
+          echo "releases/latest → $LATEST"
+          [ "$LATEST" = "$TAG" ] || { echo "::error::releases/latest is $LATEST, expected $TAG."; exit 1; }

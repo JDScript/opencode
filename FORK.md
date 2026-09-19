@@ -101,22 +101,22 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
   releases newest-first, and includes prereleases. A Cloudflare Worker in front of GitHub was considered and
   is not needed for this; it becomes worth it only if the fork ever wants per-channel rollout logic or
   telemetry that GitHub cannot express.
-- **v2 releases are prereleases.** The repository also hosts the v1 fork, whose `opencode upgrade`
-  (`packages/opencode/src/installation/fork.ts` on `jdscript`) reads `/releases/latest` = newest
-  non-prerelease. A v2 release marked latest would be installed over every v1 user's binary. `install-v2`
-  and the workflow's verify step list releases and take the newest `v2.` tag instead, and the verify step
-  fails if `/releases/latest` stops being a `v1.*` tag. Flip `--prerelease` off when the v1 line retires.
+- **v2 releases are `latest`, and that is the v1 → v2 cut-over switch.** The repository also hosts the v1
+  fork, whose `opencode upgrade` (`packages/opencode/src/installation/fork.ts` on `jdscript`) reads
+  `/releases/latest`; from the first v2 release marked latest (2026-09-19) every v1 user is upgraded on
+  their next check and their `opencode.db` is migrated on first start (§5). Until then v2 releases were
+  prereleases to prevent exactly that while the web UI was not ready. `install-v2` still reads the Atom
+  feed's newest `v2.` title rather than `/releases/latest`, for the rate limit and so it stays correct
+  regardless of which line is newest.
 - **The web UI is embedded as a finished directory, not built by `build.ts`.** Same reasoning as v1: the
   seam points upstream's archive step at any static directory; the release workflow owns building it.
   Upstream's own embedding (`app-assets.ts` → per-file brotli → `virtual:opencode-app-assets`, served by
   `packages/cli/src/services/web-ui.ts`) is unchanged, including the CSP contract: exactly one inline
   script is allowed, the one with `id="oc-theme-preload-script"`, whose hash `web-ui.ts` computes.
-- **`install-v2` installs as `opencode-v2` by default.** `~/.opencode/bin/opencode` may be the v1 fork. The
-  v2 updater's `curl` method detection (`updater.ts` `method()`) only recognises a binary at exactly
-  `~/.opencode/bin/opencode`, so an `opencode-v2` install reports "installation method not found" for
-  self-update and must be re-run by hand; `--name opencode` gets self-update. Both names open the same
-  `opencode.db`.
-
+- **`install-v2` installs as `opencode`, replacing a v1 fork binary in `~/.opencode/bin`.** That is the
+  cut-over, and it is also what the v2 updater's `curl` method detection needs: `updater.ts` `method()`
+  recognises only a binary at exactly `~/.opencode/bin/opencode`. `--name opencode-v2` keeps both side by
+  side, at the cost of self-update for the v2 one. Both names open the same `opencode.db`.
 - **`session.tool.input.delta` was declared but never published.** The schema marks it ephemeral, the manifest
   puts it on the public stream, and the client (`solid/data.ts`), TUI and generated types all handle it — but
   the runner built the tool-input fragment without a delta callback, and a test asserted that. The seam adds
@@ -148,7 +148,7 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
 `gh workflow run release-fork.yml --ref jdscript-v2`. Version format `2.0.6-jdscript.202609190200-abcdef0`:
 base from `packages/cli/package.json`, UTC stamp, fork sha. `packages/cli/src/services/updater-action.ts`
 requires a valid semver with prerelease identifiers and treats equal strings as the same release, so the
-stamp is required. Draft → three builds → prerelease → verify.
+stamp is required. Draft → three builds → publish as latest → verify.
 
 The web UI is the `web/` submodule: [JDScript/opencode-web](https://github.com/JDScript/opencode-web), branch
 `beta` (its v2 line; `main` targets the v1 fork). Bumping it is one gitlink commit:
@@ -183,7 +183,7 @@ builds use `latest`, see §3). Prefix `OPENCODE_WEB_UI_DIST=/path/to/ui/dist` to
 ## 5. Known limitations
 
 - **Self-update needs the binary at `~/.opencode/bin/opencode`.** Upstream's `curl` method detection is
-  path-based; `install-v2`'s default `opencode-v2` name is outside it (see §3).
+  path-based; an `install-v2 --name opencode-v2` side-by-side install is outside it (see §3).
 - **The V1 → V2 migration is upstream's, automatic and irreversible.** A v2 build opening a V1 `opencode.db`
   starts migrating on first start: the `event` table is cleared, V1 sessions are copied into
   `session_v2`/`session_message`, and V1 tables are never read again — V1 sessions written afterwards are not

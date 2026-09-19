@@ -5,22 +5,21 @@
 # `@opencode/cli-<target>` and asks opencode.ai for update metadata; a fork can publish to neither, so this
 # script exists beside it rather than as a seam in it.
 #
-# Releases are read from the Atom feed, taking the newest `v2.` title, never `/releases/latest`: that
-# endpoint returns the newest non-prerelease, which is where the v1 fork's upgrade path looks, and v2
-# releases are deliberately prereleases until the v2 line is ready to take v1 users over. See
-# release-fork.yml.
+# Releases are read from the Atom feed, taking the newest `v2.` title, rather than `/releases/latest`: the
+# feed has no rate limit and the explicit major keeps this script correct even while a v1 release is still
+# the newest. See release-fork.yml.
 #
 #   curl -fsSL https://raw.githubusercontent.com/JDScript/opencode/jdscript-v2/install-v2 | bash
 #   ... | bash -s -- --version 2.0.6-jdscript.202609190200-abcdef0
 #
-# The binary lands in ~/.opencode/bin/opencode-v2 by default, so a v1 `opencode` in the same directory is
-# not replaced; pass --name opencode to install it as the primary command instead. Note the v2 build opens
-# the same opencode.db as v1 and migrates it on first start, irreversibly — back it up first. See FORK.md.
+# The binary lands in ~/.opencode/bin/opencode, replacing a v1 fork install there — which is the intended
+# cut-over: the v2 build opens the same opencode.db and migrates it on first start, irreversibly, so back it
+# up first. Pass --name opencode-v2 to keep both side by side. See FORK.md.
 set -euo pipefail
 
 GITHUB_REPO="${OPENCODE_GITHUB_REPO:-JDScript/opencode}"
 INSTALL_DIR="${OPENCODE_INSTALL_DIR:-$HOME/.opencode/bin}"
-NAME="opencode-v2"
+NAME="opencode"
 VERSION=""
 
 while [ $# -gt 0 ]; do
