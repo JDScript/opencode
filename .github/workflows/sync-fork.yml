@@ -115,7 +115,7 @@ jobs:
           # `jdscript` is a linear series of fork patches on top of one upstream commit, so its
           # merge-base with upstream's tip IS that commit — whether or not `dev` was ever pushed.
           BASE=$(git merge-base "$OLD" "$UPSTREAM")
-          PATCHES=$(git rev-list --count "$BASE..$OLD")
+          PATCHES=$(git rev-list --count --no-merges "$BASE..$OLD")
 
           {
             echo "old=$OLD"
@@ -141,8 +141,9 @@ jobs:
           # git silently drops a patch whose changes are already upstream. That is usually good news —
           # something this fork carried got merged — but FORK.md's seam table is now wrong, and a
           # release should not go out with a patch count nobody has looked at. Fail so a human updates
-          # the docs, then re-run.
-          KEPT=$(git rev-list --count "$UPSTREAM..HEAD")
+          # the docs, then re-run. Merge commits are excluded on both sides: rebase linearises a merged
+          # PR, so counting them made a merge look like a dropped patch.
+          KEPT=$(git rev-list --count --no-merges "$UPSTREAM..HEAD")
           if [ "$KEPT" != "$PATCHES" ]; then
             echo "::error::Rebase kept $KEPT of $PATCHES fork patches: one is already upstream. Nothing was pushed. Rebase locally, drop it from FORK.md §3, and push."
             exit 1
