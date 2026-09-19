@@ -12,7 +12,7 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Nine commits on top of upstream `v2`:
+Ten commits on top of upstream `v2`:
 
 | Commit                                                    | Kind              | What                                                                                                                   |
 | --------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -25,6 +25,7 @@ Nine commits on top of upstream `v2`:
 | `ci: publish v2 releases as latest`                       | fork-only         | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
 | `docs: track upstream v2, not beta`                       | fork-only         | this file, `release-fork.yml` upstream lookup                                                                          |
 | `feat(cli): let an empty password disable authentication` | seams             | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
+| `ci: follow upstream v2 releases automatically`           | fork-only         | `.github/workflows/sync-fork.yml`                                                                                      |
 
 Deliberately **not** carried from v1, and why:
 
@@ -52,8 +53,13 @@ upstream/dev   ──►  dev  ──►  jdscript   the v1 line, unchanged
   disabled before its first run. The upstream commit a release sits on is recorded in its notes instead.
 - `jdscript-v2` is the local development checkout at `~/Developer/opencode-beta` — a separate clone from the
   v1 checkout because the two need different bun versions (`mise.toml` in each).
-- Rebasing is manual for now; the v1 `sync-fork.yml` is not ported. When it is, its version gate must read
-  `packages/cli/package.json`, not `packages/opencode/package.json`.
+- `sync-fork.yml` follows upstream twice a day: when `packages/cli/package.json`'s version on `upstream/v2`
+  differs from `jdscript-v2`'s, it rebases onto `v2`, regenerates the protocol/client (the fork adds an
+  endpoint, so upstream's generated files go stale on every rebase — folded into one `chore: regenerate`
+  commit), typechecks, archives the old tip as `fork/pre-rebase-v2/…`, force-pushes with a lease, and
+  dispatches `release-fork.yml`. It stops, pushing nothing, on a conflict, on a dropped patch, or on a red
+  typecheck — same rules as v1's. A manual rebase leaves the versions equal and so is not released; follow
+  it with `gh workflow run sync-fork.yml -f force=true`.
 
 ```sh
 git fetch upstream v2 --tags
@@ -65,7 +71,9 @@ git rebase upstream/v2
 ### Upstream workflows
 
 All of upstream's workflows are disabled in this repository through `gh workflow disable` (a repository
-setting; survives rebases). Only `sync-fork.yml` (v1) and `release-fork.yml` are active. After any rebase
+setting; survives rebases). Only `sync-fork.yml` and `release-fork.yml` are active. Since `jdscript-v2`
+became the default branch (2026-09-19), schedules run from it: v1's `sync-fork.yml` on `jdscript` no longer
+fires on its own (`gh workflow run sync-fork.yml --ref jdscript -f force=true` still works by hand). After any rebase
 that touches `.github/workflows/`, re-check:
 
 ```sh
@@ -224,6 +232,5 @@ builds use `latest`, see §3). Prefix `OPENCODE_WEB_UI_DIST=/path/to/ui/dist` to
   it and block while `running`. A user-acknowledged variant with backup and VACUUM was built, measured
   (165 s end to end) and then dropped in favour of upstream's behaviour; it is in this branch's history at
   tag `fork/archive/gated-migration` (commit `528c8c90e2`) if wanted again.
-- **No automatic upstream following.** See §2.
 - **No `v2` mirror branch.** See §2.
 - **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public repos.
