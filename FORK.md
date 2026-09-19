@@ -148,12 +148,17 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
   cut-over, and it is also what the v2 updater's `curl` method detection needs: `updater.ts` `method()`
   recognises only a binary at exactly `~/.opencode/bin/opencode`. `--name opencode-v2` keeps both side by
   side, at the cost of self-update for the v2 one. Both names open the same `opencode.db`.
-- **`session.tool.input.delta` was declared but never published.** The schema marks it ephemeral, the manifest
-  puts it on the public stream, and the client (`solid/data.ts`), TUI and generated types all handle it — but
-  the runner built the tool-input fragment without a delta callback, and a test asserted that. The seam adds
-  the callback; batching, ordering ahead of `Input.Ended`, and the `Input.Ended` authoritative full value are
-  upstream's existing machinery. Verified on a live prompt: one `session.tool.input.delta` carrying the read
-  tool's JSON arguments, followed by `Input.Ended`. Good candidate for an upstream PR.
+- **`session.tool.input.delta` is published again, batched.** Upstream **removed** it deliberately in PR
+  #42826 (`4fee4d7d86`, 2026-08-15, "batch streamed session deltas"): the server was emitting every provider
+  fragment as its own public event, 32/s average and 65/s peak, so text and reasoning were batched to ~100 ms
+  and tool-input deltas were dropped outright, with a test asserting they stay dropped. The schema, manifest,
+  client (`solid/data.ts` appends to `tool.state.input` while streaming), TUI and generated types all still
+  handle the event. The seam gives the tool-input fragment the same batched delta callback text and
+  reasoning have, so it addresses upstream's event-rate concern rather than reverting it: at most one event
+  per 100 ms per call, terminal flush ordered before `Input.Ended`, whose full `text` stays authoritative. It
+  is the v2 counterpart of the v1 fork's `raw` PartDelta seam (which forwarded every chunk unbatched). Verified
+  on a live prompt: one `session.tool.input.delta` with the read tool's JSON arguments, then `Input.Ended`.
+  Upstreamable as "batch tool-input deltas like text" — a different proposal from the one they rejected.
 - **`/api/experimental/server/stats` reads the serving handle, never a path.** The database file comes from
   `pragma_database_list` on the live connection, so it is exact for whatever `OPENCODE_DB`/channel resolved
   to and is `null` for `:memory:` and SqlClient-backed deployments rather than a guess. Sizes are `stat` of
