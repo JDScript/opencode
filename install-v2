@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Installs this fork's v2 build from its GitHub Releases. Upstream's `install` downloads npm tarballs of
+# `@opencode/cli-<target>` and asks opencode.ai for update metadata; a fork can publish to neither, so this
+# script exists beside it rather than as a seam in it.
+#
+# Releases are read by listing and taking the newest `v2.` tag, never `/releases/latest`: that endpoint
+# returns the newest non-prerelease, which is where the v1 fork's upgrade path looks, and v2 releases are
+# deliberately prereleases so they cannot be installed over a v1 binary. See release-fork.yml.
+#
+#   curl -fsSL https://raw.githubusercontent.com/JDScript/opencode/jdscript-v2/install-v2 | bash
+#   ... | bash -s -- --version 2.0.6-jdscript.202609190200-abcdef0
+#
+# The binary lands in ~/.opencode/bin/opencode-v2 by default, so a v1 `opencode` in the same directory is
+# not replaced; pass --name opencode to install it as the primary command instead. The v2 build uses
+# channel `jdscript`, i.e. its own database and background service, so the two coexist either way.
+set -euo pipefail
+
+GITHUB_REPO="${OPENCODE_GITHUB_REPO:-JDScript/opencode}"
+INSTALL_DIR="${OPENCODE_INSTALL_DIR:-$HOME/.opencode/bin}"
+NAME="opencode-v2"
+VERSION=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version) VERSION="$2"; shift 2 ;;
+    --name) NAME="$2"; shift 2 ;;
+    --dir) INSTALL_DIR="$2"; shift 2 ;;
+    -h|--help)
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+case "$(uname -s)" in
+  Darwin*) os=darwin ;;
+  Linux*) os=linux ;;
+  *) echo "unsupported OS: $(uname -s) — this fork publishes darwin-arm64, linux-x64 and linux-arm64 only" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64) arch=x64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+target="$os-$arch"
+ext=$([ "$os" = linux ] && echo tar.gz || echo zip)
+
+if [ -z "$VERSION" ]; then
+  # Newest published v2 release, prerelease included. `sort -V` is not available everywhere, but the
+  # API returns releases newest-first and the version stamp sorts chronologically, so the first match wins.
+  VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30" \
+    | grep -o '"tag_name": *"v2\.[^"]*"' | head -1 | sed 's/.*"v\(.*\)"/\1/')
+  if [ -z "$VERSION" ]; then
+    echo "no v2 release found in ${GITHUB_REPO}" >&2
+    exit 1
+  fi
+fi
+
+url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/opencode-${target}.${ext}"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "downloading opencode v${VERSION} (${target})"
+curl -fL --progress-bar -o "$tmp/archive.$ext" "$url"
+if [ "$ext" = zip ]; then
+  unzip -qo "$tmp/archive.zip" -d "$tmp"
+else
+  tar -xzf "$tmp/archive.tar.gz" -C "$tmp"
+fi
+
+mkdir -p "$INSTALL_DIR"
+mv -f "$tmp/opencode" "$INSTALL_DIR/$NAME"
+chmod +x "$INSTALL_DIR/$NAME"
+echo "installed $INSTALL_DIR/$NAME ($("$INSTALL_DIR/$NAME" --version))"
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) echo "add $INSTALL_DIR to your PATH" ;;
+esac
