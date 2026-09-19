@@ -2,6 +2,7 @@ import { Global } from "@opencode/util/global"
 import { AppProcess } from "@opencode/util/process"
 import { EffectFlock } from "@opencode/util/effect-flock"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "../version"
+import { enabled as forkBuild, INSTALL_SCRIPT as forkInstallScript, release as forkRelease } from "../fork" // FORK
 import { Context, Duration, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { ChildProcess } from "effect/process"
 import { parse, type ParseError } from "jsonc-parser"
@@ -249,6 +250,9 @@ const make = Effect.gen(function* () {
   }
 
   const release = Effect.fnUntraced(function* (method?: Method) {
+    // FORK: fork builds read their own releases; `package` is only used by the npm-family methods, which a
+    // GitHub-distributed build is never installed through.
+    if (forkBuild) return { package: "@opencode/cli", ...(yield* forkRelease()) }
     const distribution = method === "brew" ? "homebrew" : "npm"
     // Homebrew Core builds its formula on its own schedule, so the tap release does not describe it.
     const core = method === "brew" && installedFormula === "opencode"
@@ -415,18 +419,32 @@ const make = Effect.gen(function* () {
           yield* fs.makeDirectory(global.cache, { recursive: true })
           const directory = yield* temporaryDirectory("update-")
           const installer = path.join(directory, "install")
+          // FORK: fork builds download the fork's installer and tell it to replace this very binary.
+          const script = forkBuild ? forkInstallScript : "https://opencode.ai/v2/install"
           yield* runUpgrade({
             method,
-            command: ["curl", "-fsSL", "-o", installer, "https://opencode.ai/v2/install"],
-            displayCommand: ["curl", "-fsSL", "https://opencode.ai/v2/install"],
+            command: ["curl", "-fsSL", "-o", installer, script],
+            displayCommand: ["curl", "-fsSL", script],
             title: "Could not download the OpenCode installer",
             retry: "Check your network, then run opencode upgrade again.",
           })
+          const install = forkBuild
+            ? [
+                bash,
+                installer,
+                "--version",
+                version,
+                "--dir",
+                path.dirname(process.execPath),
+                "--name",
+                path.basename(process.execPath),
+              ]
+            : [bash, installer, "--version", version, "--no-modify-path"]
           return yield* retaining(
             method,
             runUpgrade({
               method,
-              command: [bash, installer, "--version", version, "--no-modify-path"],
+              command: install,
               displayCommand: ["opencode", "upgrade", version, "--method", "curl"],
               title: "The OpenCode installer failed",
             }),

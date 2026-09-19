@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Installs this fork's v2 build from its GitHub Releases. Upstream's `install` downloads npm tarballs of
+# `@opencode/cli-<target>` and asks opencode.ai for update metadata; a fork can publish to neither, so this
+# script exists beside it rather than as a seam in it.
+#
+# Releases are read from the Atom feed, taking the newest `v2.` title, rather than `/releases/latest`: the
+# feed has no rate limit and the explicit major keeps this script correct even while a v1 release is still
+# the newest. See release-fork.yml.
+#
+#   curl -fsSL https://raw.githubusercontent.com/JDScript/opencode/jdscript-v2/install-v2 | bash
+#   ... | bash -s -- --version 2.0.6-jdscript.202609190200-abcdef0
+#
+# The binary lands in ~/.opencode/bin/opencode, replacing a v1 fork install there — which is the intended
+# cut-over: the v2 build opens the same opencode.db and migrates it on first start, irreversibly, so back it
+# up first. Pass --name opencode-v2 to keep both side by side. See FORK.md.
+set -euo pipefail
+
+GITHUB_REPO="${OPENCODE_GITHUB_REPO:-JDScript/opencode}"
+INSTALL_DIR="${OPENCODE_INSTALL_DIR:-$HOME/.opencode/bin}"
+NAME="opencode"
+VERSION=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version) VERSION="$2"; shift 2 ;;
+    --name) NAME="$2"; shift 2 ;;
+    --dir) INSTALL_DIR="$2"; shift 2 ;;
+    -h|--help)
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+case "$(uname -s)" in
+  Darwin*) os=darwin ;;
+  Linux*) os=linux ;;
+  *) echo "unsupported OS: $(uname -s) — this fork publishes darwin-arm64, linux-x64 and linux-arm64 only" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64) arch=x64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+target="$os-$arch"
+ext=$([ "$os" = linux ] && echo tar.gz || echo zip)
+
+if [ -z "$VERSION" ]; then
+  # Newest published v2 release, prerelease included, from the Atom feed rather than the REST API: the API
+  # allows 60 unauthenticated requests per hour per IP, the feed has no such limit. Newest first, so the
+  # first v2 title wins. Same source the fork's updater (packages/cli/src/fork.ts) uses.
+  VERSION=$(curl -fsSL "https://github.com/${GITHUB_REPO}/releases.atom" \
+    | grep -o '<title>v2\.[^<]*</title>' | head -1 | sed 's/<title>v\(.*\)<\/title>/\1/')
+  if [ -z "$VERSION" ]; then
+    echo "no v2 release found in ${GITHUB_REPO}" >&2
+    exit 1
+  fi
+fi
+
+url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/opencode-${target}.${ext}"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "downloading opencode v${VERSION} (${target})"
+curl -fL --progress-bar -o "$tmp/archive.$ext" "$url"
+if [ "$ext" = zip ]; then
+  unzip -qo "$tmp/archive.zip" -d "$tmp"
+else
+  tar -xzf "$tmp/archive.tar.gz" -C "$tmp"
+fi
+
+mkdir -p "$INSTALL_DIR"
+mv -f "$tmp/opencode" "$INSTALL_DIR/$NAME"
+chmod +x "$INSTALL_DIR/$NAME"
+echo "installed $INSTALL_DIR/$NAME ($("$INSTALL_DIR/$NAME" --version))"
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) echo "add $INSTALL_DIR to your PATH" ;;
+esac

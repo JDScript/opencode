@@ -1,0 +1,207 @@
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Follows upstream without a human: when upstream cuts a v2 release, rebase `jdscript-v2` onto
+# `upstream/v2` and hand off to release-fork.yml. It is the scripted form of FORK.md §2 — same archive
+# tag, same order of operations, same typecheck gate — so a run that succeeds leaves the repository
+# exactly as a careful manual rebase would. Unlike the v1 line there is no `dev`-style mirror branch to
+# fast-forward (FORK.md §2 says why), so the upstream commit is recorded in the release notes instead.
+#
+# It acts on upstream *version changes*, not on every upstream commit. Upstream lands dozens of commits
+# per release, and force-pushing `jdscript-v2` on each would fight any local work in progress and produce
+# a release nobody asked for. The decision is two API reads and no checkout, so the schedule can be
+# tight at no real cost; the expensive part only runs when there is something to release.
+#
+# Version is compared, not commit: upstream's release tags sit on detached commits, not on `v2`, so "is
+# there a new release" is answered by the `version` field the "sync release versions" commit writes into
+# packages/cli/package.json. `jdscript-v2` carries that file unmodified, so reading it from `jdscript-v2`
+# gives the upstream version this fork currently sits on. It tracks `v2`, upstream's default branch,
+# not `beta` — a release-staging branch that stops moving for days at a time.
+#
+# What this will never do is resolve a conflict. `git rerere` lives in the local .git and does not exist
+# on a runner, so a conflicting rebase is aborted, nothing is pushed, and the run fails. Resolve it
+# locally exactly as before (FORK.md §2 and §3), push, and the next scheduled run finds nothing to do.
+
+name: sync-fork
+
+on:
+  schedule:
+    # Twice a day, at a minute chosen to avoid the top-of-hour rush when GitHub delays cron jobs.
+    # Upstream releases roughly daily, so this bounds the lag at twelve hours; a no-op run costs seconds
+    # if that ever needs tightening.
+    #
+    # GitHub disables scheduled workflows in a public repository after 60 days without a commit. The
+    # pushes this workflow makes count, so that only bites if upstream stops releasing for two months;
+    # re-enable from the Actions tab (or `gh workflow enable sync-fork.yml`) if it does.
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Sync even if upstream's version has not changed (rebases onto upstream's current tip)"
+        type: boolean
+        default: false
+      release:
+        description: "Dispatch release-fork.yml once the sync succeeds"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  # `gh workflow run` at the end. A run dispatched this way is a normal workflow_dispatch of
+  # release-fork.yml: the ref is resolved when the run is created, so it builds the tip just pushed.
+  actions: write
+
+concurrency:
+  group: sync-fork
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # The raw media type returns the file body directly instead of a base64 blob.
+          version() {
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/$1/contents/packages/cli/package.json?ref=$2" | jq -r .version
+          }
+          UPSTREAM=$(version anomalyco/opencode v2)
+          CURRENT=$(version "$GITHUB_REPOSITORY" jdscript-v2)
+          echo "upstream v2 is $UPSTREAM; jdscript-v2 sits on $CURRENT"
+
+          if [ "$UPSTREAM" != "$CURRENT" ] || [ '${{ inputs.force }}' = 'true' ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Already on upstream $CURRENT; nothing to do."
+
+  sync:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # The pre-push hook is `bun typecheck`, which this job runs itself before pushing. Skipping husky
+      # also stops `bun install` from installing the hooks in the first place.
+      HUSKY: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: jdscript-v2
+          # The rebase needs the fork's whole patch series and its merge-base with upstream.
+          fetch-depth: 0
+          # The typecheck below does not touch ./web, so the submodule is not needed (and it is private).
+
+      - name: Rebase jdscript-v2 onto upstream v2
+        id: rebase
+        run: |
+          set -euo pipefail
+
+          # Rebase rewrites the committer on every fork patch; the author is preserved. `git range-diff`
+          # ignores the committer, so FORK.md's "did the patch series change" check is unaffected.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch --no-tags https://github.com/anomalyco/opencode.git v2
+          UPSTREAM=$(git rev-parse FETCH_HEAD)
+          OLD=$(git rev-parse HEAD)
+
+          # `jdscript-v2` is a linear series of fork patches on top of one upstream commit, so its
+          # merge-base with upstream's tip IS that commit.
+          BASE=$(git merge-base "$OLD" "$UPSTREAM")
+          PATCHES=$(git rev-list --count --no-merges "$BASE..$OLD")
+
+          {
+            echo "old=$OLD"
+            echo "upstream=$UPSTREAM"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$BASE" = "$UPSTREAM" ]; then
+            echo "rebased=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::jdscript-v2 already sits on upstream's tip ${UPSTREAM:0:10}; nothing to rebase."
+            exit 0
+          fi
+
+          echo "Rebasing $PATCHES fork patches from ${BASE:0:10} onto ${UPSTREAM:0:10}"
+          if ! git rebase --onto "$UPSTREAM" "$BASE"; then
+            echo "::group::Conflicting files"
+            git diff --name-only --diff-filter=U
+            echo "::endgroup::"
+            git rebase --abort
+            echo "::error::Rebase conflicts. Nothing was pushed. Resolve locally per FORK.md §2 — the seam table in §3 says what each hunk is for."
+            exit 1
+          fi
+
+          # git silently drops a patch whose changes are already upstream. That is usually good news —
+          # something this fork carried got merged — but FORK.md's seam table is now wrong, and a
+          # release should not go out with a patch count nobody has looked at. Fail so a human updates
+          # the docs, then re-run. Merge commits are excluded on both sides: rebase linearises a merged
+          # PR, so counting them made a merge look like a dropped patch.
+          KEPT=$(git rev-list --count --no-merges "$UPSTREAM..HEAD")
+          if [ "$KEPT" != "$PATCHES" ]; then
+            echo "::error::Rebase kept $KEPT of $PATCHES fork patches: one is already upstream. Nothing was pushed. Rebase locally, drop it from FORK.md §3, and push."
+            exit 1
+          fi
+          git merge-base --is-ancestor "$UPSTREAM" HEAD
+
+          echo "rebased=true" >> "$GITHUB_OUTPUT"
+          echo "new=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Bun version and dependencies come from the rebased tree, so this runs after the rebase.
+      - if: steps.rebase.outputs.rebased == 'true'
+        uses: ./.github/actions/setup-bun
+
+      # The fork adds an endpoint, so upstream's generated OpenAPI and clients go stale on every rebase.
+      # Regenerate and fold the result into the fork's stats commit rather than leaving a merge for a
+      # human; `check:generated` afterwards is what upstream's own CI would run.
+      - if: steps.rebase.outputs.rebased == 'true'
+        name: Regenerate protocol and client
+        run: |
+          set -euo pipefail
+          (cd packages/protocol && bun run generate)
+          (cd packages/client && bun run generate)
+          if ! git diff --quiet; then
+            git add -A packages/protocol/openapi.json packages/client/src
+            git commit --quiet -m "chore: regenerate protocol and client after rebase"
+          fi
+          (cd packages/protocol && bun run check:generated)
+          (cd packages/client && bun run check:generated)
+
+      # Upstream's own CI typechecks `v2`, so a failure here is almost always upstream being briefly red;
+      # nothing is pushed, and the next run retries.
+      - if: steps.rebase.outputs.rebased == 'true'
+        run: bun typecheck
+
+      - name: Push
+        if: steps.rebase.outputs.rebased == 'true'
+        env:
+          OLD: ${{ steps.rebase.outputs.old }}
+          UPSTREAM: ${{ steps.rebase.outputs.upstream }}
+        run: |
+          set -euo pipefail
+
+          # Pin the pre-rebase state first, exactly as the manual procedure does: a tag is permanent, so
+          # the force-push below stays reversible without the reflog.
+          ARCHIVE="fork/pre-rebase-v2/$(date -u +%Y%m%d%H%M)-onto-${UPSTREAM:0:10}"
+          git tag "$ARCHIVE" "$OLD"
+          git push origin "$ARCHIVE"
+
+          # The lease is the commit this run started from, so a manual push that landed meanwhile is
+          # never clobbered — the run fails and the next one starts from the new tip. Pushes made with
+          # GITHUB_TOKEN never trigger other workflows.
+          git push --force-with-lease="jdscript-v2:$OLD" origin HEAD:refs/heads/jdscript-v2
+
+          echo "jdscript-v2: ${OLD:0:10} → $(git rev-parse --short=10 HEAD) (on upstream ${UPSTREAM:0:10}); archived as $ARCHIVE"
+
+      - name: Release
+        # Scheduled runs always release; dispatched runs release unless told not to.
+        if: github.event_name != 'workflow_dispatch' || inputs.release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release-fork.yml --ref jdscript-v2 --repo "$GITHUB_REPOSITORY"
