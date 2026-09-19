@@ -40,7 +40,8 @@ export async function inject(ctx: Plugin.Context, event: SessionPrompt) {
       sessionID: event.sessionID,
       text: block.text,
       description: block.description,
-      metadata: { openviking: block.kind },
+      // `source` is what UIs key on (OpenVibe: `metadata.source === "openviking"`); the markup is the fallback.
+      metadata: { source: "openviking", kind: block.kind },
       resume: false,
     })
     log("INFO", block.kind, `Injected OpenViking ${block.kind} context`, {
