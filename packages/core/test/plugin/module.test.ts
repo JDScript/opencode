@@ -90,3 +90,51 @@ it.live("interrupts pending watcher setup when the loader scope closes during mo
     yield* Effect.promise(() => Bun.sleep(50))
   }),
 )
+
+// FORK: v1 plugins (a factory returning hooks) load through the compatibility adapter instead of failing.
+it.live("loads a v1-shaped plugin through the legacy adapter", () =>
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const entry = path.join(directory.path, "plugin/index.mjs")
+    yield* Effect.promise(() =>
+      Bun.write(
+        entry,
+        [
+          "export async function Legacy({ directory }) {",
+          '  return { "tool.execute.before": async () => {}, dispose: async () => {} }',
+          "}",
+          "export default Legacy",
+        ].join("\n"),
+      ),
+    )
+    const modules = yield* PluginModule.make()
+    const loaded = yield* modules.load({ type: "add" as const, target: path.dirname(entry), options: {} })
+    expect(loaded).toMatchObject({ id: path.dirname(entry) })
+  }),
+)
+
+it.live("prefers a v2 definition when a module exposes both shapes", () =>
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const entry = path.join(directory.path, "plugin/index.mjs")
+    yield* Effect.promise(() =>
+      Bun.write(entry, 'export default { id: "dual", async setup() {}, async server() { return {} } }'),
+    )
+    const modules = yield* PluginModule.make()
+    const loaded = yield* modules.load({ type: "add" as const, target: path.dirname(entry), options: {} })
+    expect(loaded).toMatchObject({ id: "dual" })
+  }),
+)
+
+it.live("still rejects a module with neither shape", () =>
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const entry = path.join(directory.path, "plugin/index.mjs")
+    yield* Effect.promise(() => Bun.write(entry, "export const nothing = 1"))
+    const modules = yield* PluginModule.make()
+    const exit = yield* modules
+      .load({ type: "add" as const, target: path.dirname(entry), options: {} })
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
