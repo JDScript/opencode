@@ -36,6 +36,34 @@ const PAIRING_CONNECT_PATH = /^\/auth\/connect\/[^/]+$/
 export function isPairingConnectURL(url: URL) {
   return PAIRING_CONNECT_PATH.test(url.pathname)
 }
+const Bytes = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const ServerStats = Schema.Struct({
+  sampledAt: Schema.Number,
+  process: Schema.Struct({
+    pid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    uptimeMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    // null when the runtime exposes no process memory accounting (e.g. workerd).
+    memory: Schema.NullOr(
+      Schema.Struct({
+        rssBytes: Bytes,
+        heapUsedBytes: Bytes,
+        heapTotalBytes: Bytes,
+        externalBytes: Bytes,
+      }),
+    ),
+  }),
+  // null when the database is not file-backed (in-memory or a remote SqlClient). A missing sidecar is 0.
+  database: Schema.NullOr(
+    Schema.Struct({
+      path: Schema.String,
+      mainBytes: Bytes,
+      walBytes: Bytes,
+      shmBytes: Bytes,
+    }),
+  ),
+}).annotate({ identifier: "ServerStats" })
+export type ServerStats = typeof ServerStats.Type
 
 export const ServerGroup = HttpApiGroup.make("server.server")
   .add(
@@ -71,6 +99,19 @@ export const ServerGroup = HttpApiGroup.make("server.server")
         summary: "Redeem pairing code",
         description:
           "Redeem a pairing code. Browsers receive a session cookie and a redirect to the web app; requests that accept JSON receive a session token to use as the password.",
+      }),
+    ),
+  )
+  // FORK
+  .add(
+    HttpApiEndpoint.get("server.stats", "/api/experimental/server/stats", {
+      success: ServerStats,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "experimental.server.stats",
+        summary: "Get server resource usage",
+        description:
+          "Return the serving process's memory and the on-disk size of its database files. Process-wide; takes no location.",
       }),
     ),
   )

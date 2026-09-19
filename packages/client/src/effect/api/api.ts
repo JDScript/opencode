@@ -55,10 +55,32 @@ export type ServerConnectInput = { readonly code: string }
 export type ServerConnectOutput = { readonly token: string }
 export type ServerConnectOperation<E = never> = (input: ServerConnectInput) => Effect.Effect<ServerConnectOutput, E>
 
+export type ServerStatsOutput = {
+  readonly sampledAt: number
+  readonly process: {
+    readonly pid: number
+    readonly uptimeMs: number
+    readonly memory: {
+      readonly rssBytes: number
+      readonly heapUsedBytes: number
+      readonly heapTotalBytes: number
+      readonly externalBytes: number
+    } | null
+  }
+  readonly database: {
+    readonly path: string
+    readonly mainBytes: number
+    readonly walBytes: number
+    readonly shmBytes: number
+  } | null
+}
+export type ServerStatsOperation<E = never> = () => Effect.Effect<ServerStatsOutput, E>
+
 export interface ServerApi<E = never> {
   readonly info: ServerInfoOperation<E>
   readonly pair: ServerPairOperation<E>
   readonly connect: ServerConnectOperation<E>
+  readonly stats: ServerStatsOperation<E>
 }
 
 export type LocationGetInput = { readonly location?: { readonly directory?: string | undefined } | undefined }

@@ -3,6 +3,7 @@ import type {
   ServerPairOutput,
   ServerConnectInput,
   ServerConnectOutput,
+  ServerStatsOutput,
   LocationGetInput,
   LocationGetOutput,
   LocationReloadOutput,
@@ -436,6 +437,17 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/auth/connect/${encodeURIComponent(input.code)}`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      stats: (requestOptions?: RequestOptions) =>
+        request<ServerStatsOutput>(
+          {
+            method: "GET",
+            path: `/api/experimental/server/stats`,
             successStatus: 200,
             declaredStatuses: [400, 401],
             empty: false,

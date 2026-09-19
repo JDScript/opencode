@@ -12,6 +12,16 @@ export type PairingCode = { code: string; expires_in: number }
 
 export type PairingSession = { token: string }
 
+export type ServerStats = {
+  sampledAt: number
+  process: {
+    pid: number
+    uptimeMs: number
+    memory: { rssBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number } | null
+  }
+  database: { path: string; mainBytes: number; walBytes: number; shmBytes: number } | null
+}
+
 export type LocationPublicInfo = { directory: string; project: { id: string; directory: string; canonical: string } }
 
 export type LocationPublicRef = { directory: string }
@@ -2783,6 +2793,8 @@ export type ServerPairOutput = PairingCode
 export type ServerConnectInput = { readonly code: { readonly code: string }["code"] }
 
 export type ServerConnectOutput = PairingSession
+
+export type ServerStatsOutput = ServerStats
 
 export type LocationGetInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
