@@ -12,7 +12,7 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Five commits on top of upstream `beta`:
+Six commits on top of upstream `beta`:
 
 | Commit                                | Kind              | What                                                                                                                   |
 | ------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -26,8 +26,6 @@ Deliberately **not** carried from v1, and why:
 - **`/fork/usage`.** Not wanted on v2 yet; v2 has `GET /api/experimental/session/stats`, and its message
   storage (`session_message`, content inline, no `part` table) means the v1 query would not port anyway.
 - **Per-provider Bedrock credentials.** Not re-evaluated on v2's provider stack yet.
-- **The `web/` submodule.** The v2 web UI is a separate, not-yet-existing repository. The seam and the
-  workflow are ready for it (see §4); until it is added, releases embed upstream's `packages/app`.
 
 ---
 
@@ -152,14 +150,15 @@ base from `packages/cli/package.json`, UTC stamp, fork sha. `packages/cli/src/se
 requires a valid semver with prerelease identifiers and treats equal strings as the same release, so the
 stamp is required. Draft → three builds → prerelease → verify.
 
-Adding the v2 web UI later is one commit and no workflow change:
+The web UI is the `web/` submodule: [JDScript/opencode-web](https://github.com/JDScript/opencode-web), branch
+`beta` (its v2 line; `main` targets the v1 fork). Bumping it is one gitlink commit:
 
 ```sh
-git submodule add -b main ../<v2-webui-repo>.git web && git commit -m "feat: ship <name> as the embedded UI"
+git submodule update --remote web && git add web && git commit -m "chore(web): bump ui to $(git -C web rev-parse --short HEAD)"
 ```
 
-`release-fork.yml` already builds `web/` with pnpm when `web/package.json` exists and passes
-`web/apps/spa/dist` through `OPENCODE_WEB_UI_DIST`; adjust that path if the new UI's output differs. The
+`release-fork.yml` builds `web/` with pnpm when `web/package.json` exists and passes `web/apps/spa/dist`
+through `OPENCODE_WEB_UI_DIST`. The
 submodule checkout uses `WEB_CHECKOUT_TOKEN` from the `production` environment (fine-grained PAT,
 `contents: read` on both repositories). The UI must: build to a static directory with an `index.html`, use
 relative asset paths or same-origin, talk to `/api/*` at `location.origin`, send Basic auth with username
