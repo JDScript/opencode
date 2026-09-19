@@ -1,0 +1,249 @@
+# FORK-ONLY FILE — not present upstream, so it never conflicts on rebase.
+#
+# Publishes this fork's v2 binaries to its own GitHub Releases. Upstream's publish.yml is left untouched:
+# every job in it is guarded by `if: github.repository == 'anomalyco/opencode'`, so in a fork it already
+# does nothing. Nothing here runs packages/cli/script/publish.ts either — upstream v2 distributes through
+# npm (`@opencode/cli-<target>` tarballs, `opencode.ai/update/api` for update metadata, R2 for archives),
+# none of which a fork can publish to. GitHub Releases is the one channel we own; the fork's install
+# script and updater seam read from it.
+#
+# Two things about the version and channel:
+#
+#   1. OPENCODE_CHANNEL is `latest`, so the build opens `opencode.db` — the same file the v1 fork uses —
+#      migrates it on first start, exactly as upstream does (irreversibly; see FORK.md). Any other channel would
+#      give the build a private `opencode-<channel>.db` and users would find their history gone. The stock
+#      updater keys its update check on the channel too, which for `latest` means upstream's npm release;
+#      packages/cli/src/fork.ts overrides that for fork builds, recognised by the `-jdscript.` identifier
+#      in the version. Local development builds that must not touch the real database use
+#      OPENCODE_CHANNEL=jdscript or OPENCODE_DB instead.
+#   2. Version comes from OPENCODE_VERSION, which packages/script treats as highest priority, so releasing
+#      produces no git commits. It must be a valid semver with a prerelease: the v2 updater
+#      (services/updater-action.ts) rejects anything else, and two releases sharing a version string are
+#      considered the same release.
+#
+# v2 releases are published as PRERELEASES, on purpose and for now. This repository also hosts the v1
+# fork's releases, and the v1 build's `opencode upgrade` (packages/opencode/src/installation/fork.ts on
+# `jdscript`) reads `/releases/latest`, which GitHub defines as the newest non-prerelease. A v2 release
+# marked latest would be installed over every v1 user's binary on their next upgrade check. The v2 install
+# script and updater therefore never use `/releases/latest`; they list releases and take the newest `v2.`
+# tag. Flip `--prerelease` off, and the verify step, once the v1 line is retired.
+#
+# The release is created as a draft and only published once all builds succeeded, so a failed build
+# cannot leave a published release with missing assets.
+
+name: release-fork
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Upstream version to base this release on (blank = packages/cli/package.json)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-fork
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      sha: ${{ steps.compute.outputs.sha }}
+      bun: ${{ steps.bun.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: bun
+        # packages/script validates the running bun against `packageManager` and throws on mismatch.
+        run: echo "version=$(node -p "require('./package.json').packageManager.split('@')[1]")" >> "$GITHUB_OUTPUT"
+
+      - id: compute
+        run: |
+          set -euo pipefail
+
+          BASE='${{ inputs.base }}'
+          if [ -z "$BASE" ]; then
+            # v2's version lives in packages/cli/package.json, written by upstream's "sync release versions"
+            # commit. Not `git describe`: upstream's release tags are not ancestors of the branch.
+            BASE=$(node -p "require('./packages/cli/package.json').version")
+          fi
+          case "$BASE" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::Base version '$BASE' is not a semver release. Pass one via the 'base' input."
+              exit 1
+              ;;
+          esac
+
+          # `jdscript.<stamp>-<sha>` is one prerelease identifier pair; the stamp sorts lexicographically
+          # so versions order by release time, and the sha makes the build traceable to exact source.
+          VERSION="${BASE}-jdscript.$(date -u +%Y%m%d%H%M)-$(git rev-parse --short=7 HEAD)"
+
+          # The upstream commit this build sits on: merge-base with upstream's beta, fetched directly so a
+          # stale local mirror can never record the wrong base.
+          UPSTREAM=unknown
+          if git fetch --no-tags --quiet https://github.com/anomalyco/opencode.git beta 2>/dev/null; then
+            UPSTREAM=$(git merge-base HEAD FETCH_HEAD 2>/dev/null || echo unknown)
+          fi
+
+          # The web UI submodule's pinned commit, readable from the gitlink without initialising it.
+          WEB=$(git rev-parse --verify --quiet HEAD:web || echo none)
+
+          {
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "base=$BASE"
+            echo "upstream=$UPSTREAM"
+            echo "web=$WEB"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (base $BASE, upstream $UPSTREAM, web $WEB)"
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          notes=$(printf '%s\n' \
+            "Fork build of upstream opencode v2." \
+            "" \
+            "- Upstream version: \`${{ steps.compute.outputs.base }}\`" \
+            "- Upstream commit: \`${{ steps.compute.outputs.upstream }}\`" \
+            "- Fork commit: \`${{ steps.compute.outputs.sha }}\`" \
+            "- Web UI commit: \`${{ steps.compute.outputs.web }}\`" \
+            "" \
+            "Opens the same \`opencode.db\` as v1 and migrates it on first start, irreversibly — back it up first. Progress: GET /api/experimental/migration/v1." \
+            "" \
+            "Exact source for this build: \`git checkout ${{ steps.compute.outputs.tag }}\`")
+          gh release create '${{ steps.compute.outputs.tag }}' \
+            --draft \
+            --target '${{ steps.compute.outputs.sha }}' \
+            --title '${{ steps.compute.outputs.tag }}' \
+            --notes "$notes"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: darwin-arm64
+          - runner: ubuntu-latest
+            target: linux-x64
+          # Free on public repositories only.
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    # WEB_CHECKOUT_TOKEN is an environment secret; only jobs that declare the environment can read it.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          # ./web, when present, is a submodule of a private repository. The .gitmodules URL is relative,
+          # so it resolves against this checkout's origin and the token applies to both.
+          submodules: true
+          token: ${{ secrets.WEB_CHECKOUT_TOKEN || github.token }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ needs.version.outputs.bun }}
+
+      - run: bun install
+
+      # The web UI submodule is a pnpm workspace with its own lockfile, kept out of this repo's bun
+      # workspace on purpose. Absent (no ./web yet), the build embeds upstream's packages/app instead.
+      - if: hashFiles('web/package.json') != ''
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - if: hashFiles('web/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: hashFiles('web/package.json') != ''
+        name: Build web UI
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          echo "OPENCODE_WEB_UI_DIST=$GITHUB_WORKSPACE/web/apps/spa/dist" >> "$GITHUB_ENV"
+
+      - name: Build ${{ matrix.target }}
+        working-directory: packages/cli
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          # `latest` on purpose — see the header.
+          OPENCODE_CHANNEL: latest
+          # OPENCODE_RELEASE deliberately unset: it only gates publish.ts's docker/AUR steps, never run here.
+        # `--single` builds the runner's own native glibc target and nothing else.
+        run: bun run ./script/build.ts --single
+
+      - name: Archive and upload ${{ matrix.target }}
+        working-directory: packages/cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # build.ts writes dist/cli-<os>-<arch>/bin/opencode. Same archive names upstream's publish.ts
+          # produces (opencode-<os>-<arch>.tar.gz on linux, .zip elsewhere), which the fork install
+          # script and updater expect.
+          for dir in dist/cli-*/; do
+            target=$(basename "$dir" | sed 's/^cli-//')
+            case "$target" in
+              linux-*) (cd "$dir/bin" && tar -czf "../../opencode-$target.tar.gz" opencode) ;;
+              *) (cd "$dir/bin" && zip -qr "../../opencode-$target.zip" opencode) ;;
+            esac
+          done
+
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::No archives were produced for ${{ matrix.target }}."
+            exit 1
+          fi
+          printf 'uploading %s\n' "${assets[@]}"
+          gh release upload '${{ needs.version.outputs.tag }}' "${assets[@]}" --clobber --repo '${{ github.repository }}'
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Publish release
+        # Prerelease, not latest — see the header. `--latest=false` so GitHub does not promote it either.
+        run: gh release edit "$TAG" --draft=false --prerelease --latest=false --repo '${{ github.repository }}'
+
+      - name: Verify the release is reachable the way the v2 install script reads it
+        run: |
+          set -euo pipefail
+          STATE=$(gh release view "$TAG" --repo '${{ github.repository }}' --json isDraft,isPrerelease,assets)
+          echo "$STATE"
+          [ "$(jq -r '.isDraft' <<<"$STATE")" = "false" ] || { echo "::error::Release is still a draft."; exit 1; }
+          [ "$(jq -r '.isPrerelease' <<<"$STATE")" = "true" ] || { echo "::error::Release is not a prerelease; it would hijack v1 upgrades."; exit 1; }
+          COUNT=$(jq -r '[.assets[] | select(.name | test("^opencode-"))] | length' <<<"$STATE")
+          [ "$COUNT" -ge 3 ] || { echo "::error::Expected 3 binary assets, found $COUNT."; exit 1; }
+          # What install-v2 and the updater read: the Atom feed's newest v2.* title. The feed is cached for
+          # a short while after publishing, so give it a couple of minutes before calling it wrong.
+          for attempt in $(seq 1 12); do
+            NEWEST=$(curl -fsSL 'https://github.com/${{ github.repository }}/releases.atom' | grep -o '<title>v2\.[^<]*</title>' | head -1 | sed 's/<title>\(.*\)<\/title>/\1/')
+            [ "$NEWEST" = "$TAG" ] && break
+            sleep 10
+          done
+          echo "newest v2 release → $NEWEST"
+          [ "$NEWEST" = "$TAG" ] || { echo "::error::Newest v2 release is $NEWEST, expected $TAG."; exit 1; }
+          # And the v1 line must be untouched.
+          LATEST=$(gh api 'repos/${{ github.repository }}/releases/latest' --jq '.tag_name')
+          echo "releases/latest (v1) → $LATEST"
+          case "$LATEST" in v1.*) ;; *) echo "::error::releases/latest is $LATEST; v1 upgrades would now install v2."; exit 1 ;; esac
