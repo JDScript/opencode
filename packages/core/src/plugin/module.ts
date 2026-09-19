@@ -4,13 +4,14 @@ import type { Plugin } from "@opencode/plugin/effect/plugin"
 import { Host } from "@opencode/plugin/host"
 import { createPluginSources } from "@opencode/plugin/source"
 import { Npm } from "@opencode/util/npm"
-import { Deferred, Effect, FiberSet, PubSub, Schema, Stream } from "effect"
+import { Deferred, Effect, FiberSet, Option, PubSub, Schema, Stream } from "effect"
 import path from "path"
 import { stat } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
 import type { ConfigPluginSource } from "../config/plugin/source.js"
 import type { Generation } from "../plugin.js"
 import { PluginPromise } from "./promise.js"
+import { PluginLegacyV1 } from "./legacy-v1.js" // FORK
 import { Watcher } from "../filesystem/watcher.js"
 
 export const make = Effect.fn("PluginModule.make")(function* () {
@@ -72,6 +73,12 @@ const Module = Schema.Struct({
   ]),
 })
 
+// FORK: a v1 module may name itself (`default.id` on the object form); otherwise the configured target is the id.
+function legacyID(module: unknown, target: string) {
+  const main = (module as { default?: { id?: unknown } } | null)?.default
+  return typeof main?.id === "string" ? main.id : target
+}
+
 export class LoadError extends Schema.TaggedError<LoadError>()("PluginModule.LoadError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
@@ -104,15 +111,18 @@ const load = Effect.fn("PluginModule.load")(function* (
       ? sources.read(entrypoint)
       : Host.load(entrypoint).then((module) => ({ module, version: installed?.revision })),
   )
-  const value = (yield* Schema.decodeUnknownEffect(Module)(loaded.module).pipe(
-    Effect.mapError(
-      (cause) =>
-        new LoadError({
+  const decoded = yield* Schema.decodeUnknownEffect(Module)(loaded.module).pipe(Effect.option)
+  // FORK: a module that is not v2-shaped may be a v1 plugin (a factory returning hooks); run it through
+  // the compatibility adapter rather than rejecting it. A dual-shape module decodes as v2 and wins.
+  const legacy = Option.isNone(decoded) ? PluginLegacyV1.detect(loaded.module) : undefined
+  if (legacy) yield* Effect.log({ msg: "loading v1 plugin through the compatibility adapter", id: operation.target })
+  const value = Option.isSome(decoded)
+    ? decoded.value.default
+    : legacy
+      ? PluginLegacyV1.fromLegacy(legacyID(loaded.module, operation.target), legacy)
+      : yield* new LoadError({
           message: "Plugin must export a default definition with an id and an effect or setup function.",
-          cause,
-        }),
-    ),
-  )).default
+        })
   const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
   return {
     id: plugin.id,

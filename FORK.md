@@ -12,23 +12,26 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Twelve commits on top of upstream `v2`:
+Thirteen commits on top of upstream `v2`:
 
-| Commit                                                              | Kind                         | What                                                                                                                   |
-| ------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `feat(cli): embed a prebuilt web UI…`                               | seam                         | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
-| `ci: release and update fork builds…`                               | seams + fork-only            | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
-| `docs: add FORK.md for the v2 line`                                 | fork-only                    | this file                                                                                                              |
-| `feat(core): publish session.tool.input.delta`                      | seam                         | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
-| `feat(server): add GET /api/experimental/server/stats`              | seams                        | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
-| `feat: ship opencode-web as the embedded UI`                        | fork-only                    | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
-| `ci: publish v2 releases as latest`                                 | fork-only                    | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
-| `docs: track upstream v2, not beta`                                 | fork-only                    | this file, `release-fork.yml` upstream lookup                                                                          |
-| `feat(cli): let an empty password disable authentication`           | seams                        | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
-| `ci: follow upstream v2 releases automatically`                     | fork-only                    | `.github/workflows/sync-fork.yml`                                                                                      |
-| `fix(core): skip MCP list calls the server does not advertise`      | seam                         | `packages/core/src/mcp/client.ts`                                                                                      |
-| `packages/cli/src/commands/commands.ts`                             | `web` as an alias of `serve` |
-| `feat(cli): no password on loopback by default, and `opencode web`` | seams                        | `server-process.ts` password rules; `commands.ts` alias                                                                |
+| Commit                                                              | Kind                                                        | What                                                                                                                   |
+| ------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `feat(cli): embed a prebuilt web UI…`                               | seam                                                        | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
+| `ci: release and update fork builds…`                               | seams + fork-only                                           | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
+| `docs: add FORK.md for the v2 line`                                 | fork-only                                                   | this file                                                                                                              |
+| `feat(core): publish session.tool.input.delta`                      | seam                                                        | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
+| `feat(server): add GET /api/experimental/server/stats`              | seams                                                       | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
+| `feat: ship opencode-web as the embedded UI`                        | fork-only                                                   | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
+| `ci: publish v2 releases as latest`                                 | fork-only                                                   | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
+| `docs: track upstream v2, not beta`                                 | fork-only                                                   | this file, `release-fork.yml` upstream lookup                                                                          |
+| `feat(cli): let an empty password disable authentication`           | seams                                                       | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
+| `ci: follow upstream v2 releases automatically`                     | fork-only                                                   | `.github/workflows/sync-fork.yml`                                                                                      |
+| `fix(core): skip MCP list calls the server does not advertise`      | seam                                                        | `packages/core/src/mcp/client.ts`                                                                                      |
+| `packages/cli/src/commands/commands.ts`                             | `web` as an alias of `serve`                                |
+| `packages/core/src/plugin/module.ts`                                | Falls back to the v1 adapter when a module is not v2-shaped |
+| `packages/core/test/plugin/module.test.ts`                          | Three cases for the fallback                                |
+| `feat(cli): no password on loopback by default, and `opencode web`` | seams                                                       | `server-process.ts` password rules; `commands.ts` alias                                                                |
+| `feat(core): run v1 plugins through a compatibility adapter`        | seam + fork-only                                            | `plugin/module.ts` fallback; `plugin/legacy-v1.ts`                                                                     |
 
 Deliberately **not** carried from v1, and why:
 
@@ -109,7 +112,7 @@ git grep -nE '(//|#) FORK' -- ':!FORK.md'
 | `packages/protocol/openapi.json`, `packages/client/src/**/generated/**`, `packages/client/src/effect/api/api.ts` | Regenerated (`bun run generate` in `protocol` and `client`); regenerate rather than merge on conflict |
 
 Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`,
-`packages/cli/src/fork.ts`, `.gitmodules` and the `web/` submodule.
+`packages/cli/src/fork.ts`, `packages/core/src/plugin/legacy-v1.ts`, `.gitmodules` and the `web/` submodule.
 
 ### Non-obvious choices worth keeping
 
@@ -181,6 +184,25 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
   `ServerAuth.required()` already treats `""` as no auth; a second seam in `server/process.ts` makes its
   pre-router gate honour that and stops it rejecting `""` as "missing". Startup logs the reason when auth is
   off. `opencode web` is an alias of `serve` (`commands.ts`), as in v1.
+
+- **v1 plugins run unmodified through `plugin/legacy-v1.ts`.** Upstream v2 rejects a v1 plugin (a factory
+  returning hooks) with "Plugin must export a default definition with an id and an effect or setup
+  function"; it documents the migration but offers no runtime compatibility. This fork is distributed to
+  people who already have v1 plugins configured — `@openviking/opencode-plugin` being the one that
+  prompted it — so `module.ts` falls back to the adapter when the v2 schema does not match (a dual-shape
+  module still decodes as v2 and wins). The adapter maps each v1 hook to the v2 domain hook with the same
+  meaning; the file header lists the table. Two choices worth knowing: `chat.message` maps to
+  `session.hook("prompt")`, so injected text becomes part of the persisted user message — that is v1's
+  semantics too (a `synthetic` text part), just without the flag for UIs to hide it; and the v1 `client`
+  is a Proxy that logs `tui.showToast`, accepts `app.log`, and returns `{ data: undefined }` for anything
+  else after one warning, because the in-process v2 context has no HTTP SDK. Event translation is the
+  substantive part: v2 has no `message.*` events, so `message.updated`/`message.part.updated` are
+  synthesised from `session.inbox.enqueued`, `session.step.*`, `session.text.ended`,
+  `session.reasoning.ended` and `session.tool.*` (names remembered from `session.tool.input.started`);
+  `session.idle`/`session.error`/`session.compacted` come from `session.execution.*` and
+  `session.compaction.ended`. Unsupported v1 hooks (`tool`, `auth`, `provider`, `chat.params`, …) log one
+  warning and are ignored. Verified against the real OpenViking plugin on a live server: MCP registered
+  (15 tools), session derived, context injected into the prompt, state persisted, no adapter warnings.
 
 ### Duplications that must be kept in step
 
