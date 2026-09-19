@@ -1,6 +1,7 @@
 import { Global } from "@opencode/util/global"
 import { AppProcess } from "@opencode/util/process"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "../version"
+import { enabled as forkBuild, INSTALL_SCRIPT as forkInstallScript, release as forkRelease } from "../fork" // FORK
 import { Context, Duration, Effect, FileSystem, Layer, Ref } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { parse, type ParseError } from "jsonc-parser"
@@ -19,9 +20,9 @@ export interface Interface {
   readonly method: () => Effect.Effect<Method | undefined>
   readonly latest: () => Effect.Effect<string, Error>
   readonly upgrade: (method: Method, version: string) => Effect.Effect<void, Error>
-  readonly removal: (method: Method) =>
-    | { readonly command: ReadonlyArray<string>; readonly run: Effect.Effect<void, Error> }
-    | undefined
+  readonly removal: (
+    method: Method,
+  ) => { readonly command: ReadonlyArray<string>; readonly run: Effect.Effect<void, Error> } | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/cli/Updater") {}
@@ -141,6 +142,9 @@ const make = Effect.gen(function* () {
   }
 
   const release = Effect.fnUntraced(function* (method?: Method) {
+    // FORK: fork builds read their own releases; `package` is only used by the npm-family methods, which a
+    // GitHub-distributed build is never installed through.
+    if (forkBuild) return { package: "@opencode/cli", ...(yield* forkRelease()) }
     const distribution = method === "brew" ? "homebrew" : "npm"
     const response = yield* Effect.tryPromise({
       try: (signal) =>
@@ -207,11 +211,17 @@ const make = Effect.gen(function* () {
           yield* fs.makeDirectory(global.cache, { recursive: true })
           const directory = yield* temporaryDirectory("update-")
           const installer = path.join(directory, "install")
+          // FORK: the fork's installer, told to replace this very binary rather than its default name.
           const download = yield* exec(
-            ["curl", "-fsSL", "-o", installer, "https://opencode.ai/v2/install"],
+            ["curl", "-fsSL", "-o", installer, forkBuild ? forkInstallScript : "https://opencode.ai/v2/install"],
             "5 minutes",
           )
           if (download.code !== 0) return download
+          if (forkBuild) {
+            const dir = path.dirname(process.execPath)
+            const name = path.basename(process.execPath)
+            return yield* exec(["bash", installer, "--version", version, "--dir", dir, "--name", name], "5 minutes")
+          }
           return yield* exec(["bash", installer, "--version", version, "--no-modify-path"], "5 minutes")
         }
         if (method === "brew") return yield* exec(["brew", "upgrade", packageName], "5 minutes")
