@@ -1108,11 +1108,21 @@ const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
+          // FORK: a user message that arrives mid-run is inserted before the step that follows it, so that
+          // step's assistant reply already saw it even though its parentID still names the earlier user
+          // message. Upstream then treats the new user message as unanswered and sends one more request
+          // whose history ends with the assistant reply — a prefill, which Claude 4.6+/5.x reject with 400.
+          // An assistant created after the last user message has answered it; exit as if parentID matched.
+          const answered =
+            lastAssistant !== undefined &&
+            (lastAssistant.parentID === lastUser.id ||
+              lastAssistant.time.created > lastUser.time.created ||
+              (lastAssistant.time.created === lastUser.time.created && lastAssistant.id > lastUser.id))
           if (
             lastAssistant?.finish &&
             !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
-            lastAssistant.parentID === lastUser.id
+            answered
           ) {
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),

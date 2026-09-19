@@ -529,6 +529,48 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
   }),
 )
 
+// FORK: the shape the loop sees after a user message arrives mid-run: the reply that followed it still
+// carries the earlier user's parentID, but it was created after the new message and therefore answered it.
+// Upstream sends one more request here, whose history ends with that reply — an assistant prefill that
+// Claude 4.6+/5.x reject. The loop must exit without a request instead.
+it.instance("loop exits without a prefill request when the reply postdates a mid-run user message", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const first = yield* user(chat.id, "first question")
+    const second = yield* user(chat.id, "second question, sent while the model was still working")
+    const assistant: SessionV1.Assistant = {
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: first.id,
+      sessionID: chat.id,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: second.time.created + 1 },
+      finish: "stop",
+    }
+    yield* sessions.updateMessage(assistant)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: assistant.id,
+      sessionID: chat.id,
+      type: "text",
+      text: "answers both",
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.id).toBe(assistant.id)
+    expect(yield* llm.hits).toHaveLength(0)
+  }),
+)
+
 it.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

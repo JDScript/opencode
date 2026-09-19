@@ -334,6 +334,19 @@ Fork-only files that are not seams: `packages/opencode/src/installation/fork.ts`
   (~6–8 s holding the write lock, so a concurrently streaming session waits on the 5 s `busy_timeout`
   and could see `SQLITE_BUSY`) — once per database, then never again.
 
+- **A reply that postdates a mid-run user message has answered it.** Sending while the agent is busy inserts
+  the user message immediately; the step that follows it builds its request from the full history, so its
+  reply saw the new message — but the reply's `parentID` still names the earlier user message, because the
+  loop assigns `parentID: lastUser.id` from the step's own view. Upstream's exit check requires
+  `parentID === lastUser.id`, so it treats the new message as unanswered and sends one more request whose
+  history ends `[…, user(new), assistant(stop)]`. That is an assistant prefill: older Claude models continued
+  the text (a duplicated tail of the answer), Claude 4.6+/5.x return 400 "This model does not support
+  assistant message prefill" and the session stops on an `APIError`. Nine of those in the log, all this
+  shape. The seam also accepts a reply created after the last user message. The remaining window — a user
+  message landing between the step's history read and its assistant-message insert — is milliseconds wide
+  and leaves that message to the next prompt rather than erroring every time. Related upstream issues
+  (#46415, #40455, #32548) cover the other prefill triggers (`unknown` finish, step cap), not this one.
+
 ### Duplications that must be kept in step
 
 Nothing enforces these; they are the only places one value lives twice.
