@@ -10,6 +10,7 @@ import { Npm } from "@opencode/util/npm"
 import { Plugin } from "../plugin.js"
 import { InstancePlugins } from "./instance.js"
 import { PluginInternal } from "./internal.js"
+import { PluginSuperseded } from "./superseded.js" // FORK
 import { PluginModule } from "./module.js"
 import { SdkPlugins } from "./sdk.js"
 import { PluginUpdate } from "./update.js"
@@ -150,7 +151,8 @@ export const layer = Layer.effectDiscard(
         revision: "internal",
         source: { type: "builtin" as const },
       }))
-      const operations = yield* sources.operations()
+      // FORK: skip configured packages a built-in plugin replaces (see superseded.ts).
+      const operations = yield* PluginSuperseded.filter(yield* sources.operations())
       // Activate everything available locally before waiting on missing package installs.
       const immediate = yield* resolve(modules, pre, post, operations, false, running)
       const source = (source: Plugin.Source) =>
