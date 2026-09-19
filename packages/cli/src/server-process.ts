@@ -71,13 +71,31 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
+      // FORK: `opencode serve` on a loopback address needs no password unless one is given, as in v1.
+      // Upstream always generates a random one. ServerAuth.required() already treats "" as no auth; this
+      // is the only place that decides. The rules, in order:
+      //   - service mode keeps upstream's behaviour (stored or random) unless the stored password is "";
+      //   - an explicit OPENCODE_PASSWORD wins; an explicitly empty one disables auth on any address
+      //     (read from process.env because Config.redacted reports an empty variable as absent);
+      //   - otherwise loopback → no auth, anything else → random, so binding 0.0.0.0 never goes open by
+      //     accident. The TUI's private --stdio server always receives an explicit password from its
+      //     parent (services/standalone.ts) and is unaffected.
+      const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)
+      const emptyEnvironmentPassword =
+        process.env.OPENCODE_PASSWORD === "" || process.env.OPENCODE_SERVER_PASSWORD === ""
       const password =
         options.mode === "service"
-          ? config.password || randomBytes(32).toString("base64url")
+          ? (config.password ?? randomBytes(32).toString("base64url"))
           : environmentPassword
             ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
+            : emptyEnvironmentPassword || (options.mode === "default" && loopback)
+              ? ""
+              : randomBytes(32).toString("base64url")
+      if (password === "")
+        yield* Effect.logInfo("server authentication disabled", {
+          reason: emptyEnvironmentPassword ? "empty password" : "loopback default",
+          hostname,
+        })
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
       const server = yield* start(
@@ -125,7 +143,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           : {
               onListen: (address, shutdown) =>
                 Effect.gen(function* () {
-                  if (!config.password) yield* ServiceConfig.password(password)
+                  if (config.password === undefined) yield* ServiceConfig.password(password)
                   return yield* ServiceRegistration.register({
                     address,
                     password,
