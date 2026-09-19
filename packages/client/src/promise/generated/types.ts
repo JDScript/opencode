@@ -2,6 +2,16 @@ export type JsonValue = null | boolean | number | string | Array<JsonValue> | { 
 
 export type ServerInfo = { version: string; pid: number; urls: Array<string>; paths: { tmp: string } }
 
+export type ServerStats = {
+  sampledAt: number
+  process: {
+    pid: number
+    uptimeMs: number
+    memory: { rssBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number } | null
+  }
+  database: { path: string; mainBytes: number; walBytes: number; shmBytes: number } | null
+}
+
 export type LocationPublicInfo = { directory: string; project: { id: string; directory: string; canonical: string } }
 
 export type LocationPublicRef = { directory: string }
@@ -2683,6 +2693,8 @@ export const isWorktreeError = (value: unknown): value is WorktreeError =>
   typeof value === "object" && value !== null && "name" in value && value["name"] === "WorktreeError"
 
 export type ServerInfoOutput = ServerInfo
+
+export type ServerStatsOutput = ServerStats
 
 export type LocationGetInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]

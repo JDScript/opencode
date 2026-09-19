@@ -1,5 +1,6 @@
 import type {
   ServerInfoOutput,
+  ServerStatsOutput,
   LocationGetInput,
   LocationGetOutput,
   LocationReloadOutput,
@@ -410,6 +411,17 @@ export function make(options: ClientOptions) {
       info: (requestOptions?: RequestOptions) =>
         request<ServerInfoOutput>(
           { method: "GET", path: `/api/info`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+          requestOptions,
+        ),
+      stats: (requestOptions?: RequestOptions) =>
+        request<ServerStatsOutput>(
+          {
+            method: "GET",
+            path: `/api/experimental/server/stats`,
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
           requestOptions,
         ),
     },

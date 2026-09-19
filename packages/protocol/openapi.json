@@ -48,6 +48,48 @@
         "summary": "Get server info"
       }
     },
+    "/api/experimental/server/stats": {
+      "get": {
+        "tags": ["server"],
+        "operationId": "experimental.server.stats",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "ServerStats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Return the serving process's memory and the on-disk size of its database files. Process-wide; takes no location.",
+        "summary": "Get server resource usage"
+      }
+    },
     "/api/location": {
       "get": {
         "tags": ["location"],
@@ -16828,6 +16870,98 @@
           }
         },
         "required": ["version", "pid", "urls", "paths"],
+        "additionalProperties": false
+      },
+      "ServerStats": {
+        "type": "object",
+        "properties": {
+          "sampledAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "process": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "uptimeMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "memory": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "rssBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "heapUsedBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "heapTotalBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "externalBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": ["rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["pid", "uptimeMs", "memory"],
+            "additionalProperties": false
+          },
+          "database": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "mainBytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "walBytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "shmBytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": ["path", "mainBytes", "walBytes", "shmBytes"],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["sampledAt", "process", "database"],
         "additionalProperties": false
       },
       "ServiceUnavailableErrorEncoded": {

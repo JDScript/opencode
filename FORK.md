@@ -12,7 +12,7 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Three commits on top of upstream `beta`:
+Five commits on top of upstream `beta`:
 
 | Commit                                | Kind              | What                                                                                                                   |
 | ------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -118,6 +118,22 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
   `~/.opencode/bin/opencode`, so an `opencode-v2` install reports "installation method not found" for
   self-update and must be re-run by hand; `--name opencode` gets self-update. Both names open the same
   `opencode.db`.
+
+- **`session.tool.input.delta` was declared but never published.** The schema marks it ephemeral, the manifest
+  puts it on the public stream, and the client (`solid/data.ts`), TUI and generated types all handle it — but
+  the runner built the tool-input fragment without a delta callback, and a test asserted that. The seam adds
+  the callback; batching, ordering ahead of `Input.Ended`, and the `Input.Ended` authoritative full value are
+  upstream's existing machinery. Verified on a live prompt: one `session.tool.input.delta` carrying the read
+  tool's JSON arguments, followed by `Input.Ended`. Good candidate for an upstream PR.
+- **`/api/experimental/server/stats` reads the serving handle, never a path.** The database file comes from
+  `pragma_database_list` on the live connection, so it is exact for whatever `OPENCODE_DB`/channel resolved
+  to and is `null` for `:memory:` and SqlClient-backed deployments rather than a guess. Sizes are `stat` of
+  the main file and its `-wal`/`-shm` sidecars (missing → 0). Memory is `process.memoryUsage()`, `null` where
+  the runtime lacks it (workerd). No checkpoint, no VACUUM, no second connection, no directory walk. It uses
+  `node:fs/promises` directly because the request-handler layer does not carry the `FileSystem` service.
+  Note Bun reports `heapUsed > heapTotal` at times; the numbers are the runtime's, unadjusted.
+- **Regenerated client is part of the commit.** `bun run generate` in `packages/protocol` (OpenAPI) and
+  `packages/client` (promise/effect clients); upstream's `check:generated` would otherwise fail on rebase.
 
 ### Duplications that must be kept in step
 

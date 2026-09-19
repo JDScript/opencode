@@ -6,6 +6,7 @@ import { HttpApiClient } from "effect/unstable/httpapi"
 import { ClientApi } from "../../contract"
 import type {
   ServerInfoOutput,
+  ServerStatsOutput,
   LocationGetInput,
   LocationGetOutput,
   LocationReloadOutput,
@@ -281,7 +282,13 @@ const preserveStream =
 const EndpointServerInfo = (raw: RawClient["server.server"]) => () =>
   preserveEffect<ServerInfoOutput>()(raw["server.info"]({}).pipe(Effect.mapError(mapClientError)))
 
-const adaptGroupServer = (raw: RawClient["server.server"]) => ({ info: EndpointServerInfo(raw) })
+const EndpointServerStats = (raw: RawClient["server.server"]) => () =>
+  preserveEffect<ServerStatsOutput>()(raw["server.stats"]({}).pipe(Effect.mapError(mapClientError)))
+
+const adaptGroupServer = (raw: RawClient["server.server"]) => ({
+  info: EndpointServerInfo(raw),
+  stats: EndpointServerStats(raw),
+})
 
 const EndpointLocationGet = (raw: RawClient["server.location"]) => (input?: LocationGetInput) =>
   preserveEffect<LocationGetOutput>()(
