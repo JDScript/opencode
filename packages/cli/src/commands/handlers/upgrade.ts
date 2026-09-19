@@ -1,5 +1,6 @@
 import { intro, log, outro, spinner } from "@clack/prompts"
 import { Effect, Option } from "effect"
+import { enabled as forkBuild, legacyOpenVikingConfigs, legacyOpenVikingNotice } from "../../fork" // FORK
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Updater } from "../../services/updater"
@@ -33,6 +34,11 @@ export default Runtime.handler(
       Effect.tap(() => Effect.sync(() => progress.stop("Upgrade complete"))),
       Effect.tapCause(() => Effect.sync(() => progress.stop("Upgrade failed", 1))),
     )
+    // FORK: point users of the v1 OpenViking npm plugin at the built-in replacement.
+    if (forkBuild) {
+      const legacy = yield* legacyOpenVikingConfigs()
+      if (legacy.length) log.warn(legacyOpenVikingNotice(legacy))
+    }
     outro("Done")
   }, handlePromptErrors),
 )

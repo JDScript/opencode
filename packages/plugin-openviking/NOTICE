@@ -1,0 +1,4 @@
+This package contains code from the OpenViking project (https://github.com/volcengine/OpenViking),
+licensed under the Apache License, Version 2.0. The files under vendor/openviking/ are copied from
+the npm package @openviking/opencode-plugin (version recorded in vendor/openviking/VERSION) with the
+modifications listed in vendor/openviking/PATCHES.md.

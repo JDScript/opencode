@@ -77,6 +77,18 @@ mv -f "$tmp/opencode" "$INSTALL_DIR/$NAME"
 chmod +x "$INSTALL_DIR/$NAME"
 echo "installed $INSTALL_DIR/$NAME ($("$INSTALL_DIR/$NAME" --version))"
 
+# This build has OpenViking memory built in (packages/plugin-openviking). While the v1 npm plugin is still
+# configured the built-in one stands down, so say so once. Only the global config is checked.
+config_dir="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
+for f in "$config_dir/opencode.json" "$config_dir/opencode.jsonc"; do
+  if [ -f "$f" ] && grep -q '"@openviking/opencode-plugin"' "$f"; then
+    echo
+    echo "note: OpenViking memory is built into this build and reuses your ~/.openviking credentials."
+    echo "      Remove \"@openviking/opencode-plugin\" from the plugins list in $f to switch over;"
+    echo "      until then the v1 plugin keeps running through the compatibility adapter and the built-in one stays idle."
+  fi
+done
+
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) echo "add $INSTALL_DIR to your PATH" ;;
