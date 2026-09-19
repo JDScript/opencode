@@ -1,0 +1,185 @@
+# Fork notes (v2 line)
+
+The v2 line of [JDScript/opencode](https://github.com/JDScript/opencode): upstream
+[anomalyco/opencode](https://github.com/anomalyco/opencode)'s `beta` branch plus the smallest possible
+patch set to ship a different web UI and publish binaries to this repository's GitHub Releases. The v1 line
+lives on `jdscript` with its own `FORK.md`; the two share a repository and nothing else.
+
+The design goal is unchanged from v1: **stay rebasable onto upstream forever.** New files plus the smallest
+possible seams; every seam carries a `FORK` comment and is listed in section 3.
+
+---
+
+## 1. What this branch carries
+
+Three commits on top of upstream `beta`:
+
+| Commit                                | Kind              | What                                                                                                                   |
+| ------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `feat(cli): embed a prebuilt web UI…` | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
+| `ci: release and update fork builds…` | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
+| `docs: add FORK.md for the v2 line`   | fork-only         | this file                                                                                                              |
+
+Deliberately **not** carried from v1, and why:
+
+- **`tool-input-delta` publishing.** v2 publishes `session.tool.input.delta` natively.
+- **`/fork/usage`.** Not wanted on v2 yet; v2 has `GET /api/experimental/session/stats`, and its message
+  storage (`session_message`, content inline, no `part` table) means the v1 query would not port anyway.
+- **Per-provider Bedrock credentials.** Not re-evaluated on v2's provider stack yet.
+- **The `web/` submodule.** The v2 web UI is a separate, not-yet-existing repository. The seam and the
+  workflow are ready for it (see §4); until it is added, releases embed upstream's `packages/app`.
+
+---
+
+## 2. Branch layout and following upstream
+
+```
+upstream/beta  ──►  jdscript-v2   this line's trunk; rebased onto upstream/beta; v2 releases cut from here
+upstream/dev   ──►  dev  ──►  jdscript   the v1 line, unchanged
+```
+
+- There is **no `beta` mirror branch** in the fork (unlike `dev` for v1). Pushing upstream's `beta` to the
+  fork would fire the push-triggered workflows that arrive with it (`publish.yml`, `deploy.yml`,
+  `nix-hashes.yml` all list `beta`), and a workflow file that is not on the default branch cannot be
+  disabled before its first run. The upstream commit a release sits on is recorded in its notes instead.
+- `jdscript-v2` is the local development checkout at `~/Developer/opencode-beta` — a separate clone from the
+  v1 checkout because the two need different bun versions (`mise.toml` in each).
+- Rebasing is manual for now; the v1 `sync-fork.yml` is not ported. When it is, its version gate must read
+  `packages/cli/package.json`, not `packages/opencode/package.json`.
+
+```sh
+git fetch upstream beta --tags
+archive="fork/pre-rebase-v2/$(date -u +%Y%m%d%H%M)-onto-$(git rev-parse --short upstream/beta)"
+git tag "$archive" jdscript-v2 && git push origin "$archive"
+git rebase upstream/beta
+```
+
+### Upstream workflows
+
+All of upstream's workflows are disabled in this repository through `gh workflow disable` (a repository
+setting; survives rebases). Only `sync-fork.yml` (v1) and `release-fork.yml` are active. After any rebase
+that touches `.github/workflows/`, re-check:
+
+```sh
+gh workflow list --repo JDScript/opencode --json name,path,state \
+  --jq '.[] | select(.state=="active") | .path'
+```
+
+Note that upstream's v2 `publish.yml` is job-guarded by `github.repository == 'anomalyco/opencode'`; it is
+disabled anyway.
+
+---
+
+## 3. Upstream touch points
+
+```sh
+git grep -nE '(//|#) FORK' -- ':!FORK.md'
+```
+
+| File                                | Seam                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------- |
+| `packages/cli/script/app-assets.ts` | `OPENCODE_WEB_UI_DIST`: archive a prebuilt static directory instead of `packages/app` |
+
+Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`.
+
+### Non-obvious choices worth keeping
+
+- **Release builds use `OPENCODE_CHANNEL=latest`; development builds do not.** The channel is a compile-time
+  constant with three effects (`packages/cli/src/database-path.ts`, `services/service-config.ts`,
+  `services/updater.ts`): the database file, the background-service file and default port, and the update
+  URL. `latest` maps to `opencode.db` — the file the v1 fork uses — which is the point: a user upgrading to
+  v2 keeps their history: upstream's `V1Migration.layer` migrates it on first start (see §5). Any other
+  channel gets a private `opencode-<channel>.db`, so for **development against a machine that has a real
+  database**, build with `OPENCODE_CHANNEL=jdscript` or run with `OPENCODE_DB=/path/to/copy.db`; the release
+  workflow must never do that.
+- **Fork builds are recognised by version, not channel.** `packages/cli/src/fork.ts` sets `enabled` when
+  `OPENCODE_VERSION` contains `-jdscript.`, which every `release-fork.yml` version does. The two seams in
+  `updater.ts` then read releases from this repository's **Atom feed** (`/releases.atom`) and upgrade via
+  `install-v2 --version X --dir <execPath dir> --name <execPath name>`. Without the seams a `latest`-channel
+  build would ask `opencode.ai/update/api/latest/cli/npm`, get upstream's version, and — through the `curl`
+  method — replace itself with upstream's binary on the first check. The Atom feed rather than the REST API
+  because the API allows 60 unauthenticated requests per hour per IP and the updater polls every ten
+  minutes; several machines behind one NAT exhaust that. The feed has no such limit, lists the newest ten
+  releases newest-first, and includes prereleases. A Cloudflare Worker in front of GitHub was considered and
+  is not needed for this; it becomes worth it only if the fork ever wants per-channel rollout logic or
+  telemetry that GitHub cannot express.
+- **v2 releases are prereleases.** The repository also hosts the v1 fork, whose `opencode upgrade`
+  (`packages/opencode/src/installation/fork.ts` on `jdscript`) reads `/releases/latest` = newest
+  non-prerelease. A v2 release marked latest would be installed over every v1 user's binary. `install-v2`
+  and the workflow's verify step list releases and take the newest `v2.` tag instead, and the verify step
+  fails if `/releases/latest` stops being a `v1.*` tag. Flip `--prerelease` off when the v1 line retires.
+- **The web UI is embedded as a finished directory, not built by `build.ts`.** Same reasoning as v1: the
+  seam points upstream's archive step at any static directory; the release workflow owns building it.
+  Upstream's own embedding (`app-assets.ts` → per-file brotli → `virtual:opencode-app-assets`, served by
+  `packages/cli/src/services/web-ui.ts`) is unchanged, including the CSP contract: exactly one inline
+  script is allowed, the one with `id="oc-theme-preload-script"`, whose hash `web-ui.ts` computes.
+- **`install-v2` installs as `opencode-v2` by default.** `~/.opencode/bin/opencode` may be the v1 fork. The
+  v2 updater's `curl` method detection (`updater.ts` `method()`) only recognises a binary at exactly
+  `~/.opencode/bin/opencode`, so an `opencode-v2` install reports "installation method not found" for
+  self-update and must be re-run by hand; `--name opencode` gets self-update. Both names open the same
+  `opencode.db`.
+
+### Duplications that must be kept in step
+
+| Value            | Locations                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| Fork GitHub repo | `GITHUB_REPO` in `install-v2` (and, once added, the updater seam)                                        |
+| bun version      | `packageManager` in `package.json` · `mise.toml`. The workflow reads `package.json`, so it cannot drift. |
+| Archive names    | `opencode-<os>-<arch>.{zip,tar.gz}` in `release-fork.yml` and `install-v2`                               |
+
+---
+
+## 4. Releasing and the web UI
+
+`gh workflow run release-fork.yml --ref jdscript-v2`. Version format `2.0.6-jdscript.202609190200-abcdef0`:
+base from `packages/cli/package.json`, UTC stamp, fork sha. `packages/cli/src/services/updater-action.ts`
+requires a valid semver with prerelease identifiers and treats equal strings as the same release, so the
+stamp is required. Draft → three builds → prerelease → verify.
+
+Adding the v2 web UI later is one commit and no workflow change:
+
+```sh
+git submodule add -b main ../<v2-webui-repo>.git web && git commit -m "feat: ship <name> as the embedded UI"
+```
+
+`release-fork.yml` already builds `web/` with pnpm when `web/package.json` exists and passes
+`web/apps/spa/dist` through `OPENCODE_WEB_UI_DIST`; adjust that path if the new UI's output differs. The
+submodule checkout uses `WEB_CHECKOUT_TOKEN` from the `production` environment (fine-grained PAT,
+`contents: read` on both repositories). The UI must: build to a static directory with an `index.html`, use
+relative asset paths or same-origin, talk to `/api/*` at `location.origin`, send Basic auth with username
+`opencode` (v2 servers require a password by default), and give its one inline script
+`id="oc-theme-preload-script"`.
+
+Local build, exactly as the workflow does it:
+
+```sh
+mise install && bun install
+cd packages/cli
+OPENCODE_CHANNEL=jdscript OPENCODE_VERSION=2.0.6-jdscript.local bun run script/build.ts --single --skip-install
+OPENCODE_PASSWORD=x ./dist/cli-*/bin/opencode serve --port 4300 --print-logs
+```
+
+`OPENCODE_CHANNEL=jdscript` here is deliberate: it keeps a local build off the real `opencode.db` (release
+builds use `latest`, see §3). Prefix `OPENCODE_WEB_UI_DIST=/path/to/ui/dist` to embed a different UI. `--skip-install` skips fetching the
+`@opentui/core` and `@opencode-ai/pty` binaries for other targets; drop it if the build complains.
+
+---
+
+## 5. Known limitations
+
+- **Self-update needs the binary at `~/.opencode/bin/opencode`.** Upstream's `curl` method detection is
+  path-based; `install-v2`'s default `opencode-v2` name is outside it (see §3).
+- **The V1 → V2 migration is upstream's, automatic and irreversible.** A v2 build opening a V1 `opencode.db`
+  starts migrating on first start: the `event` table is cleared, V1 sessions are copied into
+  `session_v2`/`session_message`, and V1 tables are never read again — V1 sessions written afterwards are not
+  imported. Measured on a 9.4 GB database: about 70 s, no warnings, 647 sessions and 41k messages carried over.
+  Two things upstream does not do: **back up** (copy `opencode.db` before the first v2 start) and **reclaim
+  space** (the file stays 9.4 GB until a `VACUUM`, which took 36 s and left 2.3 GB). Progress is at
+  `GET /api/experimental/migration/v1` (`required` → `running` with `{numerator, denominator}` sessions →
+  `completed` | `error`); upstream's TUI overlays it, its web app does not, so the fork's web UI should poll
+  it and block while `running`. A user-acknowledged variant with backup and VACUUM was built, measured
+  (165 s end to end) and then dropped in favour of upstream's behaviour; it is in this branch's history at
+  tag `fork/archive/gated-migration` (commit `528c8c90e2`) if wanted again.
+- **No automatic upstream following.** See §2.
+- **No `beta` mirror branch.** See §2.
+- **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public repos.
