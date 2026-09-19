@@ -88,9 +88,11 @@ import { WellKnown } from "../wellknown.js"
 import { WriteTool } from "../tool/plugin/write.js"
 import { AgentPlugin } from "./agent.js"
 import BrowserPlugin from "@opencode/plugin-browser"
+import OpenVikingPlugin from "@jdscript/opencode-openviking" // FORK
 import { CommandPlugin } from "./command.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
+import { PluginPromise } from "./promise.js" // FORK
 import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
 import { ProviderPlugins } from "./provider.js"
@@ -217,6 +219,9 @@ const pre = [
   ToolInputRepairPlugin.Plugin,
   ConfigWorktreePlugin.Plugin,
   ConfigMcpPlugin.Plugin,
+  // FORK: built-in OpenViking memory; inert unless OpenViking credentials exist. After the config MCP
+  // plugin so it can see (and respect a disabled) user-defined `openviking` server.
+  PluginPromise.fromPromise(OpenVikingPlugin),
   McpCodeModeDefaultsPlugin.Plugin,
   WellKnownPlugin.Plugin,
   VcsGitPlugin.Plugin,
