@@ -327,18 +327,34 @@ export const connect = Effect.fnUntraced(function* (
         Effect.tapError((error) => Effect.logWarning(`failed to ${what}`, { server, error: error.message })),
       )
 
+    // FORK: skip list calls the server did not advertise. The SDK returns an empty list for those anyway,
+    // but writes "Client.listPrompts() called but server does not advertise prompts capability" to stderr
+    // through console.debug on every catalog refresh — noise in every log for any tools-only server.
+    // readResource below already gates the same way.
+    const capabilities = client.getServerCapabilities()
     return {
       modern: client.getProtocolEra() === "modern",
       instructions: client.getInstructions()?.trim() || undefined,
-      tools: () => list("list MCP tools", () => client.listTools(undefined, catalog)).pipe(Effect.map((r) => r.tools)),
+      tools: () =>
+        capabilities?.tools
+          ? list("list MCP tools", () => client.listTools(undefined, catalog)).pipe(Effect.map((r) => r.tools))
+          : Effect.succeed([]),
       prompts: () =>
-        list("list MCP prompts", () => client.listPrompts(undefined, catalog)).pipe(Effect.map((r) => r.prompts)),
+        capabilities?.prompts
+          ? list("list MCP prompts", () => client.listPrompts(undefined, catalog)).pipe(Effect.map((r) => r.prompts))
+          : Effect.succeed([]),
       resources: () =>
-        list("list MCP resources", () => client.listResources(undefined, catalog)).pipe(Effect.map((r) => r.resources)),
+        capabilities?.resources
+          ? list("list MCP resources", () => client.listResources(undefined, catalog)).pipe(
+              Effect.map((r) => r.resources),
+            )
+          : Effect.succeed([]),
       resourceTemplates: () =>
-        list("list MCP resource templates", () => client.listResourceTemplates(undefined, catalog)).pipe(
-          Effect.map((r) => r.resourceTemplates),
-        ),
+        capabilities?.resources
+          ? list("list MCP resource templates", () => client.listResourceTemplates(undefined, catalog)).pipe(
+              Effect.map((r) => r.resourceTemplates),
+            )
+          : Effect.succeed([]),
       readResource: (input) => {
         if (!client.getServerCapabilities()?.resources) return Effect.succeed(undefined)
         return request("read MCP resource", (signal) =>
