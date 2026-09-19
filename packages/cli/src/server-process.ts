@@ -71,11 +71,16 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
-      // FORK: an explicitly empty password (OPENCODE_PASSWORD= for standalone, `service set password ""`)
-      // disables authentication instead of being replaced by a random one. ServerAuth.required() already
-      // treats "" as no auth; only this fallback stood in the way. For a loopback-only server behind
-      // trusted clients. Read from process.env directly because Config.redacted reports an empty
-      // variable as absent, which is exactly the case this distinguishes.
+      // FORK: `opencode serve` on a loopback address needs no password unless one is given, as in v1.
+      // Upstream always generates a random one. ServerAuth.required() already treats "" as no auth; this
+      // is the only place that decides. The rules, in order:
+      //   - service mode keeps upstream's behaviour (stored or random) unless the stored password is "";
+      //   - an explicit OPENCODE_PASSWORD wins; an explicitly empty one disables auth on any address
+      //     (read from process.env because Config.redacted reports an empty variable as absent);
+      //   - otherwise loopback → no auth, anything else → random, so binding 0.0.0.0 never goes open by
+      //     accident. The TUI's private --stdio server always receives an explicit password from its
+      //     parent (services/standalone.ts) and is unaffected.
+      const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)
       const emptyEnvironmentPassword =
         process.env.OPENCODE_PASSWORD === "" || process.env.OPENCODE_SERVER_PASSWORD === ""
       const password =
@@ -83,10 +88,14 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           ? (config.password ?? randomBytes(32).toString("base64url"))
           : environmentPassword
             ? Redacted.value(environmentPassword)
-            : emptyEnvironmentPassword
+            : emptyEnvironmentPassword || (options.mode === "default" && loopback)
               ? ""
               : randomBytes(32).toString("base64url")
-      if (password === "") yield* Effect.logWarning("server authentication disabled by empty password")
+      if (password === "")
+        yield* Effect.logInfo("server authentication disabled", {
+          reason: emptyEnvironmentPassword ? "empty password" : "loopback default",
+          hostname,
+        })
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
       const server = yield* start(

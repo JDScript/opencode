@@ -12,21 +12,23 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Eleven commits on top of upstream `v2`:
+Twelve commits on top of upstream `v2`:
 
-| Commit                                                         | Kind              | What                                                                                                                   |
-| -------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `feat(cli): embed a prebuilt web UI…`                          | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
-| `ci: release and update fork builds…`                          | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
-| `docs: add FORK.md for the v2 line`                            | fork-only         | this file                                                                                                              |
-| `feat(core): publish session.tool.input.delta`                 | seam              | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
-| `feat(server): add GET /api/experimental/server/stats`         | seams             | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
-| `feat: ship opencode-web as the embedded UI`                   | fork-only         | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
-| `ci: publish v2 releases as latest`                            | fork-only         | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
-| `docs: track upstream v2, not beta`                            | fork-only         | this file, `release-fork.yml` upstream lookup                                                                          |
-| `feat(cli): let an empty password disable authentication`      | seams             | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
-| `ci: follow upstream v2 releases automatically`                | fork-only         | `.github/workflows/sync-fork.yml`                                                                                      |
-| `fix(core): skip MCP list calls the server does not advertise` | seam              | `packages/core/src/mcp/client.ts`                                                                                      |
+| Commit                                                              | Kind                         | What                                                                                                                   |
+| ------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `feat(cli): embed a prebuilt web UI…`                               | seam                         | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
+| `ci: release and update fork builds…`                               | seams + fork-only            | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
+| `docs: add FORK.md for the v2 line`                                 | fork-only                    | this file                                                                                                              |
+| `feat(core): publish session.tool.input.delta`                      | seam                         | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
+| `feat(server): add GET /api/experimental/server/stats`              | seams                        | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
+| `feat: ship opencode-web as the embedded UI`                        | fork-only                    | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
+| `ci: publish v2 releases as latest`                                 | fork-only                    | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
+| `docs: track upstream v2, not beta`                                 | fork-only                    | this file, `release-fork.yml` upstream lookup                                                                          |
+| `feat(cli): let an empty password disable authentication`           | seams                        | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
+| `ci: follow upstream v2 releases automatically`                     | fork-only                    | `.github/workflows/sync-fork.yml`                                                                                      |
+| `fix(core): skip MCP list calls the server does not advertise`      | seam                         | `packages/core/src/mcp/client.ts`                                                                                      |
+| `packages/cli/src/commands/commands.ts`                             | `web` as an alias of `serve` |
+| `feat(cli): no password on loopback by default, and `opencode web`` | seams                        | `server-process.ts` password rules; `commands.ts` alias                                                                |
 
 Deliberately **not** carried from v1, and why:
 
@@ -162,15 +164,18 @@ Fork-only files that are not seams: `mise.toml`, `.github/workflows/release-fork
 - **Regenerated client is part of the commit.** `bun run generate` in `packages/protocol` (OpenAPI) and
   `packages/client` (promise/effect clients); upstream's `check:generated` would otherwise fail on rebase.
 
-- **An empty password disables authentication; an absent one still gets a random password.** Upstream's
-  `ServerAuth.required()` already treats `""` as no auth, but three fallbacks stood in the way: the CLI
-  replaced a falsy password with a random one (both `OPENCODE_PASSWORD` and `service.json`), `process.ts`
-  rejected a falsy password as "missing", and its pre-router `dispatch` gate checked credentials without
-  consulting `required`. Two seams make `""` flow through and honoured. Standalone: `OPENCODE_PASSWORD=`
-  (empty, not unset — `Config.redacted` reports an empty variable as absent, so `server-process.ts` reads
-  `process.env` directly for this one distinction). Service: `opencode service set password ""`. A warning
-  is logged at start. Only for loopback servers behind trusted clients; `--hostname 0.0.0.0` with no
-  password exposes every session and PTY on the network.
+- **`opencode serve` on loopback needs no password; anywhere else it does.** Upstream always generates a
+  random password and prints it. v1 only authenticated when `OPENCODE_SERVER_PASSWORD` was set, and a
+  browser client on the same machine should not need a credential exchange, so the fork decides in
+  `server-process.ts`, in order: the background service keeps upstream's behaviour (stored or random)
+  unless its stored password is `""` (`opencode service set password ""`); an explicit `OPENCODE_PASSWORD`
+  wins; an explicitly empty one (`OPENCODE_PASSWORD=`, read from `process.env` because `Config.redacted`
+  reports an empty variable as absent) disables auth on any address; otherwise `127.0.0.1`/`localhost`/`::1`
+  → no auth, anything else → random, so `--hostname 0.0.0.0` never goes open by accident. The TUI's private
+  `--stdio` server always gets an explicit password from `services/standalone.ts` and is unaffected.
+  `ServerAuth.required()` already treats `""` as no auth; a second seam in `server/process.ts` makes its
+  pre-router gate honour that and stops it rejecting `""` as "missing". Startup logs the reason when auth is
+  off. `opencode web` is an alias of `serve` (`commands.ts`), as in v1.
 
 ### Duplications that must be kept in step
 
