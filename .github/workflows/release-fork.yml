@@ -92,7 +92,7 @@ jobs:
           fi
 
           # The web UI submodule's pinned commit, readable from the gitlink without initialising it.
-          WEB=$(git rev-parse HEAD:web 2>/dev/null || echo none)
+          WEB=$(git rev-parse --verify --quiet HEAD:web || echo none)
 
           {
             echo "version=$VERSION"
