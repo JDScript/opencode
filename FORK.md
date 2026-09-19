@@ -12,20 +12,21 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Ten commits on top of upstream `v2`:
+Eleven commits on top of upstream `v2`:
 
-| Commit                                                    | Kind              | What                                                                                                                   |
-| --------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `feat(cli): embed a prebuilt web UI…`                     | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
-| `ci: release and update fork builds…`                     | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
-| `docs: add FORK.md for the v2 line`                       | fork-only         | this file                                                                                                              |
-| `feat(core): publish session.tool.input.delta`            | seam              | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
-| `feat(server): add GET /api/experimental/server/stats`    | seams             | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
-| `feat: ship opencode-web as the embedded UI`              | fork-only         | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
-| `ci: publish v2 releases as latest`                       | fork-only         | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
-| `docs: track upstream v2, not beta`                       | fork-only         | this file, `release-fork.yml` upstream lookup                                                                          |
-| `feat(cli): let an empty password disable authentication` | seams             | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
-| `ci: follow upstream v2 releases automatically`           | fork-only         | `.github/workflows/sync-fork.yml`                                                                                      |
+| Commit                                                         | Kind              | What                                                                                                                   |
+| -------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `feat(cli): embed a prebuilt web UI…`                          | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
+| `ci: release and update fork builds…`                          | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
+| `docs: add FORK.md for the v2 line`                            | fork-only         | this file                                                                                                              |
+| `feat(core): publish session.tool.input.delta`                 | seam              | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
+| `feat(server): add GET /api/experimental/server/stats`         | seams             | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
+| `feat: ship opencode-web as the embedded UI`                   | fork-only         | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
+| `ci: publish v2 releases as latest`                            | fork-only         | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
+| `docs: track upstream v2, not beta`                            | fork-only         | this file, `release-fork.yml` upstream lookup                                                                          |
+| `feat(cli): let an empty password disable authentication`      | seams             | `server-process.ts` password fallback; `server/process.ts` pre-router gate honours `ServerAuth.required`               |
+| `ci: follow upstream v2 releases automatically`                | fork-only         | `.github/workflows/sync-fork.yml`                                                                                      |
+| `fix(core): skip MCP list calls the server does not advertise` | seam              | `packages/core/src/mcp/client.ts`                                                                                      |
 
 Deliberately **not** carried from v1, and why:
 
@@ -98,6 +99,7 @@ git grep -nE '(//|#) FORK' -- ':!FORK.md'
 | `packages/cli/src/services/updater.ts`                                                                           | Fork builds read releases from `fork.ts` and upgrade through `install-v2`                             |
 | `packages/cli/src/server-process.ts`                                                                             | An explicitly empty password is kept, not replaced by a random one (env and service config)           |
 | `packages/server/src/process.ts`                                                                                 | `""` password is not "missing"; the pre-router auth gate honours `ServerAuth.required`                |
+| `packages/core/src/mcp/client.ts`                                                                                | List tools/prompts/resources only when the server advertises the capability                           |
 | `packages/core/src/session/runner/publish-llm-event.ts`                                                          | Publishes `session.tool.input.delta` (batched) alongside `Input.Ended`                                |
 | `packages/core/test/session-runner-tool-events.test.ts`                                                          | Replaces upstream's "deltas are not published" assertion with the batched-delta one                   |
 | `packages/protocol/src/groups/server.ts`                                                                         | `server.stats` endpoint and `ServerStats` schema                                                      |
