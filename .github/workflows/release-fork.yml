@@ -86,10 +86,10 @@ jobs:
           # so versions order by release time, and the sha makes the build traceable to exact source.
           VERSION="${BASE}-jdscript.$(date -u +%Y%m%d%H%M)-$(git rev-parse --short=7 HEAD)"
 
-          # The upstream commit this build sits on: merge-base with upstream's beta, fetched directly so a
+          # The upstream commit this build sits on: merge-base with upstream's v2, fetched directly so a
           # stale local mirror can never record the wrong base.
           UPSTREAM=unknown
-          if git fetch --no-tags --quiet https://github.com/anomalyco/opencode.git beta 2>/dev/null; then
+          if git fetch --no-tags --quiet https://github.com/anomalyco/opencode.git v2 2>/dev/null; then
             UPSTREAM=$(git merge-base HEAD FETCH_HEAD 2>/dev/null || echo unknown)
           fi
 

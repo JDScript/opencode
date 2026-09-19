@@ -1,7 +1,7 @@
 # Fork notes (v2 line)
 
 The v2 line of [JDScript/opencode](https://github.com/JDScript/opencode): upstream
-[anomalyco/opencode](https://github.com/anomalyco/opencode)'s `beta` branch plus the smallest possible
+[anomalyco/opencode](https://github.com/anomalyco/opencode)'s `v2` branch plus the smallest possible
 patch set to ship a different web UI and publish binaries to this repository's GitHub Releases. The v1 line
 lives on `jdscript` with its own `FORK.md`; the two share a repository and nothing else.
 
@@ -12,13 +12,18 @@ possible seams; every seam carries a `FORK` comment and is listed in section 3.
 
 ## 1. What this branch carries
 
-Six commits on top of upstream `beta`:
+Eight commits on top of upstream `v2`:
 
-| Commit                                | Kind              | What                                                                                                                   |
-| ------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `feat(cli): embed a prebuilt web UI…` | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
-| `ci: release and update fork builds…` | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
-| `docs: add FORK.md for the v2 line`   | fork-only         | this file                                                                                                              |
+| Commit                                                 | Kind              | What                                                                                                                   |
+| ------------------------------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `feat(cli): embed a prebuilt web UI…`                  | seam              | `OPENCODE_WEB_UI_DIST` in `packages/cli/script/app-assets.ts`                                                          |
+| `ci: release and update fork builds…`                  | seams + fork-only | `mise.toml`, `.github/workflows/release-fork.yml`, `install-v2`, `packages/cli/src/fork.ts`; two seams in `updater.ts` |
+| `docs: add FORK.md for the v2 line`                    | fork-only         | this file                                                                                                              |
+| `feat(core): publish session.tool.input.delta`         | seam              | `publish-llm-event.ts`: the tool-input fragment gets the batched delta publisher text and reasoning have               |
+| `feat(server): add GET /api/experimental/server/stats` | seams             | `protocol/groups/server.ts`, `server/handlers/server.ts`; regenerated `openapi.json` and `packages/client`             |
+| `feat: ship opencode-web as the embedded UI`           | fork-only         | `.gitmodules` + `web/` submodule → JDScript/opencode-web branch `beta`                                                 |
+| `ci: publish v2 releases as latest`                    | fork-only         | the v1 → v2 cut-over: releases stop being prereleases; `install-v2` installs as `opencode`                             |
+| `docs: track upstream v2, not beta`                    | fork-only         | this file, `release-fork.yml` upstream lookup                                                                          |
 
 Deliberately **not** carried from v1, and why:
 
@@ -32,13 +37,17 @@ Deliberately **not** carried from v1, and why:
 ## 2. Branch layout and following upstream
 
 ```
-upstream/beta  ──►  jdscript-v2   this line's trunk; rebased onto upstream/beta; v2 releases cut from here
+upstream/v2    ──►  jdscript-v2   this line's trunk; rebased onto upstream/v2; v2 releases cut from here
 upstream/dev   ──►  dev  ──►  jdscript   the v1 line, unchanged
 ```
 
-- There is **no `beta` mirror branch** in the fork (unlike `dev` for v1). Pushing upstream's `beta` to the
-  fork would fire the push-triggered workflows that arrive with it (`publish.yml`, `deploy.yml`,
-  `nix-hashes.yml` all list `beta`), and a workflow file that is not on the default branch cannot be
+- **Track `upstream/v2`, not `beta`.** `v2` is upstream's default branch and where v2.0.x releases are cut
+  (their "sync release versions" commits land there; the tags sit on detached commits whose merge-base is
+  `v2`). `beta` is a release-staging branch that receives occasional merges from `v2` and stopped moving on
+  2026-09-17; the fork tracked it by mistake for two days and was 83 commits behind before noticing.
+- There is **no `v2` mirror branch** in the fork (unlike `dev` for v1). Pushing upstream's `v2` to the fork
+  would fire the push-triggered workflows that arrive with it (`publish.yml`, `deploy.yml`, `nix-hashes.yml`,
+  `test.yml`, `check.yml` all list `v2`), and a workflow file that is not on the default branch cannot be
   disabled before its first run. The upstream commit a release sits on is recorded in its notes instead.
 - `jdscript-v2` is the local development checkout at `~/Developer/opencode-beta` — a separate clone from the
   v1 checkout because the two need different bun versions (`mise.toml` in each).
@@ -46,10 +55,10 @@ upstream/dev   ──►  dev  ──►  jdscript   the v1 line, unchanged
   `packages/cli/package.json`, not `packages/opencode/package.json`.
 
 ```sh
-git fetch upstream beta --tags
-archive="fork/pre-rebase-v2/$(date -u +%Y%m%d%H%M)-onto-$(git rev-parse --short upstream/beta)"
+git fetch upstream v2 --tags
+archive="fork/pre-rebase-v2/$(date -u +%Y%m%d%H%M)-onto-$(git rev-parse --short upstream/v2)"
 git tag "$archive" jdscript-v2 && git push origin "$archive"
-git rebase upstream/beta
+git rebase upstream/v2
 ```
 
 ### Upstream workflows
@@ -196,5 +205,5 @@ builds use `latest`, see §3). Prefix `OPENCODE_WEB_UI_DIST=/path/to/ui/dist` to
   (165 s end to end) and then dropped in favour of upstream's behaviour; it is in this branch's history at
   tag `fork/archive/gated-migration` (commit `528c8c90e2`) if wanted again.
 - **No automatic upstream following.** See §2.
-- **No `beta` mirror branch.** See §2.
+- **No `v2` mirror branch.** See §2.
 - **`linux-arm64` needs a public repository.** The `ubuntu-24.04-arm` runner is only free on public repos.
