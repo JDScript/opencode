@@ -25,6 +25,7 @@ import { BedrockEventStream } from "./bedrock-event-stream.js"
 import { classifyProviderFailure } from "../provider-error.js"
 import { JsonObject, optionalArray, ProviderShared } from "./shared.js"
 import { BedrockAuth } from "./utils/bedrock-auth.js"
+import { AnthropicThinkingBinding } from "./utils/anthropic-thinking-binding.js"
 import { BedrockCache } from "./utils/bedrock-cache.js"
 import { BedrockMedia } from "./utils/bedrock-media.js"
 import { Lifecycle } from "./utils/lifecycle.js"
@@ -152,15 +153,7 @@ export type BedrockConverseBody = Schema.Schema.Type<typeof BedrockConverseBody>
 
 const BedrockBindingFields = Schema.StructWithRest(
   Schema.Struct({
-    thinking: Schema.optional(
-      Schema.StructWithRest(
-        Schema.Struct({
-          type: Schema.String,
-          block_binding: Schema.optional(JsonObject),
-        }),
-        [JsonObject],
-      ),
-    ),
+    thinking: Schema.optional(AnthropicThinkingBinding.Thinking),
     anthropic_beta: Schema.optional(Schema.Array(Schema.String)),
   }),
   [JsonObject],
@@ -811,15 +804,15 @@ const transport = () => {
     ...http,
     prepare: (input: Parameters<typeof http.prepare>[0]) =>
       Effect.gen(function* () {
-        if (!/(?:^|\.)anthropic\.claude-fable-5[.-]1(?:$|[-:@])/i.test(input.request.model.id))
-          return yield* http.prepare(input)
+        if (!AnthropicThinkingBinding.bedrockEligible(input.request.model)) return yield* http.prepare(input)
         // FORK: Bedrock thinking variants live in raw overlays. Apply binding defaults after
         // those overlays, before HTTP preparation signs the final bytes.
         const effective = mergeJsonRecords(input.body, input.request.http?.body)
         const fields = yield* Schema.decodeUnknownEffect(BedrockBindingFields)(
           effective?.additionalModelRequestFields ?? {},
         ).pipe(Effect.mapError((cause) => ProviderShared.invalidRequest("Invalid Bedrock thinking fields", cause)))
-        if (fields.thinking?.type === "disabled") return yield* http.prepare(input)
+        const thinking = AnthropicThinkingBinding.bedrockDefault(input.request.model, fields.thinking)
+        if (thinking === fields.thinking) return yield* http.prepare(input)
         return yield* http.prepare({
           ...input,
           request: LLMRequest.update(input.request, {
@@ -829,10 +822,7 @@ const transport = () => {
                 ...input.request.http?.body,
                 additionalModelRequestFields: {
                   ...fields,
-                  thinking: {
-                    ...(fields.thinking ?? { type: "adaptive" }),
-                    block_binding: fields.thinking?.block_binding ?? { prefix_mismatch_behavior: "drop_block" },
-                  },
+                  thinking,
                   anthropic_beta: [
                     ...new Set([...(fields.anthropic_beta ?? []), "thinking-binding-controls-2026-08-01"]),
                   ],

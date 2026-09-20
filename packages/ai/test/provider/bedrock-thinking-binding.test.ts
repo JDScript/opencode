@@ -3,7 +3,7 @@ import { fromUtf8, toUtf8 } from "@smithy/util-utf8"
 import { AwsV4Signer } from "aws4fetch"
 import { expect } from "bun:test"
 import { Effect } from "effect"
-import { LLM, LLMRequest, Message, ToolDefinition } from "../../src/index.js"
+import { LanguageModel, LLM, LLMRequest, Message, ToolDefinition } from "../../src/index.js"
 import { AmazonBedrock } from "../../src/providers.js"
 import { LLMClient } from "../../src/route.js"
 import { it } from "../lib/effect.js"
@@ -109,7 +109,14 @@ it.effect("protects signed Fable reasoning replay under a changed system before 
   }),
 )
 
-for (const id of ["anthropic.claude-fable-5-1", "global.anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5.1"]) {
+for (const id of [
+  "anthropic.claude-fable-5-1",
+  "global.anthropic.claude-fable-5-1",
+  "us.anthropic.claude-fable-5.1",
+  "us.anthropic.claude-fable-5-10",
+  "us.anthropic.claude-fable-6",
+  "us.anthropic.claude-sonnet-6",
+]) {
   it.effect(`adds binding defaults for ${id}`, () =>
     wire(request(id), (body) => {
       expect(body.additionalModelRequestFields).toMatchObject({
@@ -200,14 +207,125 @@ it.effect("preserves an explicitly configured binding object without adding a se
 
 for (const id of [
   "us.anthropic.claude-fable-5",
-  "us.anthropic.claude-fable-5-10",
   "us.anthropic.claude-opus-4-8",
+  "us.anthropic.claude-next",
   "amazon.nova-2-lite-v1:0",
   "global.openai.gpt-6-astra",
 ]) {
-  it.effect(`does not add Fable binding fields for ${id}`, () =>
+  it.effect(`does not enable thinking implicitly for ${id}`, () =>
     wire(request(id), (body) => {
       expect(body.additionalModelRequestFields).toBeUndefined()
     }),
   )
 }
+
+for (const id of [
+  "us.anthropic.claude-fable-5-1",
+  "us.anthropic.claude-fable-5-10",
+  "us.anthropic.claude-fable-6",
+  "us.anthropic.claude-sonnet-6",
+]) {
+  for (const thinking of [{ type: "adaptive" }, { type: "enabled", budget_tokens: 2048 }]) {
+    it.effect(`adds binding to active ${thinking.type} thinking for ${id}`, () =>
+      wire(
+        LLMRequest.update(request(id), { http: { body: { additionalModelRequestFields: { thinking } } } }),
+        (body) => {
+          expect(body.additionalModelRequestFields).toEqual({
+            thinking: { ...thinking, block_binding: { prefix_mismatch_behavior: "drop_block" } },
+            anthropic_beta: [beta],
+          })
+        },
+      ),
+    )
+  }
+}
+
+it.effect("adds binding to the supported Fable 5 adaptive mode", () => {
+  const thinking = { type: "adaptive", display: "summarized" }
+  return wire(
+    LLMRequest.update(request("us.anthropic.claude-fable-5"), {
+      http: { body: { additionalModelRequestFields: { thinking } } },
+    }),
+    (body) => {
+      expect(body.additionalModelRequestFields).toEqual({
+        thinking: { ...thinking, block_binding: { prefix_mismatch_behavior: "drop_block" } },
+        anthropic_beta: [beta],
+      })
+    },
+  )
+})
+
+for (const id of [
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+  "us.anthropic.claude-opus-4",
+  "us.anthropic.claude-haiku-4-5",
+  "us.anthropic.claude-fable-5",
+  "us.anthropic.claude-next",
+]) {
+  it.effect(`leaves unconfirmed manual binding support unchanged for ${id}`, () => {
+    const additionalModelRequestFields = { thinking: { type: "enabled", budget_tokens: 1024 } }
+    return wire(LLMRequest.update(request(id), { http: { body: { additionalModelRequestFields } } }), (body) => {
+      expect(body.additionalModelRequestFields).toEqual(additionalModelRequestFields)
+    })
+  })
+}
+
+it.effect("honors explicit capability opt-in without changing manual thinking mode", () => {
+  const input = request("us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+  const thinking = { type: "enabled", budget_tokens: 1024 }
+  return wire(
+    LLMRequest.update(input, {
+      model: LanguageModel.update(input.model, { compatibility: { supportsThinkingBlockBinding: true } }),
+      http: { body: { additionalModelRequestFields: { thinking } } },
+    }),
+    (body) => {
+      expect(body.additionalModelRequestFields).toEqual({
+        thinking: { ...thinking, block_binding: { prefix_mismatch_behavior: "drop_block" } },
+        anthropic_beta: [beta],
+      })
+    },
+  )
+})
+
+for (const thinking of [undefined, { type: "adaptive" }, { type: "enabled", budget_tokens: 2048 }]) {
+  it.effect(`honors binding opt-out with ${thinking?.type ?? "implicit"} thinking`, () => {
+    const input = request()
+    return wire(
+      LLMRequest.update(input, {
+        model: LanguageModel.update(input.model, { compatibility: { supportsThinkingBlockBinding: false } }),
+        http: { body: { additionalModelRequestFields: { ...(thinking ? { thinking } : {}) } } },
+      }),
+      (body) => {
+        expect(body.additionalModelRequestFields).toEqual(thinking ? { thinking } : {})
+      },
+    )
+  })
+}
+
+it.effect("honors explicit binding capability for an unversioned deployment", () => {
+  const input = request("us.anthropic.custom-deployment")
+  return wire(
+    LLMRequest.update(input, {
+      model: LanguageModel.update(input.model, { compatibility: { supportsThinkingBlockBinding: true } }),
+    }),
+    (body) => {
+      expect(body.additionalModelRequestFields).toEqual({
+        thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+        anthropic_beta: [beta],
+      })
+    },
+  )
+})
+
+it.effect("does not add Anthropic controls to non-Anthropic active thinking", () => {
+  const additionalModelRequestFields = { thinking: { type: "enabled" }, custom: "kept" }
+  return wire(
+    LLMRequest.update(request("amazon.nova-2-lite-v1:0"), {
+      http: { body: { additionalModelRequestFields } },
+    }),
+    (body) => {
+      expect(body.additionalModelRequestFields).toEqual(additionalModelRequestFields)
+    },
+  )
+})
