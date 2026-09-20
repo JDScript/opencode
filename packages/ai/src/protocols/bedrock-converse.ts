@@ -2,15 +2,18 @@ import { Effect, Encoding, Schema } from "effect"
 import { Route } from "../route/client.js"
 import { Endpoint } from "../route/endpoint.js"
 import { Protocol } from "../route/protocol.js"
+import { HttpTransport } from "../route/transport/index.js"
 import {
   AIError,
+  HttpOptions,
   LLMEvent,
+  LLMRequest,
+  mergeJsonRecords,
   Usage,
   type CacheHint,
   type FinishReason,
   type FinishReasonDetails,
   type JsonSchema,
-  type LLMRequest,
   type LanguageModelToolSchemaCompatibility,
   type ProviderMetadata,
   type ReasoningPart,
@@ -22,6 +25,7 @@ import { BedrockEventStream } from "./bedrock-event-stream.js"
 import { classifyProviderFailure } from "../provider-error.js"
 import { JsonObject, optionalArray, ProviderShared } from "./shared.js"
 import { BedrockAuth } from "./utils/bedrock-auth.js"
+import { AnthropicThinkingBinding } from "./utils/anthropic-thinking-binding.js"
 import { BedrockCache } from "./utils/bedrock-cache.js"
 import { BedrockMedia } from "./utils/bedrock-media.js"
 import { Lifecycle } from "./utils/lifecycle.js"
@@ -146,6 +150,14 @@ const BedrockBodyFields = {
 }
 const BedrockConverseBody = Schema.Struct(BedrockBodyFields)
 export type BedrockConverseBody = Schema.Schema.Type<typeof BedrockConverseBody>
+
+const BedrockBindingFields = Schema.StructWithRest(
+  Schema.Struct({
+    thinking: Schema.optional(AnthropicThinkingBinding.Thinking),
+    anthropic_beta: Schema.optional(Schema.Array(Schema.String)),
+  }),
+  [JsonObject],
+)
 
 const BedrockUsageSchema = Schema.Struct({
   inputTokens: Schema.optional(Schema.Number),
@@ -786,6 +798,43 @@ export const protocol = Protocol.make({
   },
 })
 
+const transport = () => {
+  const http = HttpTransport.httpJson<BedrockConverseBody, object>({ framing })
+  return {
+    ...http,
+    prepare: (input: Parameters<typeof http.prepare>[0]) =>
+      Effect.gen(function* () {
+        if (!AnthropicThinkingBinding.bedrockEligible(input.request.model)) return yield* http.prepare(input)
+        // FORK: Bedrock thinking variants live in raw overlays. Apply binding defaults after
+        // those overlays, before HTTP preparation signs the final bytes.
+        const effective = mergeJsonRecords(input.body, input.request.http?.body)
+        const fields = yield* Schema.decodeUnknownEffect(BedrockBindingFields)(
+          effective?.additionalModelRequestFields ?? {},
+        ).pipe(Effect.mapError((cause) => ProviderShared.invalidRequest("Invalid Bedrock thinking fields", cause)))
+        const thinking = AnthropicThinkingBinding.bedrockDefault(input.request.model, fields.thinking)
+        if (thinking === fields.thinking) return yield* http.prepare(input)
+        return yield* http.prepare({
+          ...input,
+          request: LLMRequest.update(input.request, {
+            http: new HttpOptions({
+              ...input.request.http,
+              body: {
+                ...input.request.http?.body,
+                additionalModelRequestFields: {
+                  ...fields,
+                  thinking,
+                  anthropic_beta: [
+                    ...new Set([...(fields.anthropic_beta ?? []), "thinking-binding-controls-2026-08-01"]),
+                  ],
+                },
+              },
+            }),
+          }),
+        })
+      }),
+  }
+}
+
 export const route = Route.make({
   id: ADAPTER,
   provider: "bedrock",
@@ -798,7 +847,7 @@ export const route = Route.make({
     ({ body }) => `/model/${encodeURIComponent(body.modelId)}/converse-stream`,
   ),
   auth: BedrockAuth.auth,
-  framing,
+  transport: transport(),
 })
 
 export const sigV4Auth = BedrockAuth.sigV4
