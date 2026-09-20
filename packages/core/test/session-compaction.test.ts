@@ -223,6 +223,30 @@ it.effect("auto compaction estimates current content against the buffered prompt
     expect(compaction.required(input(69_999, outputLimited))).toBe(false)
     expect(compaction.required(input(70_000, outputLimited))).toBe(true)
 
+    const declared = { context: 1_000_000, output: 128_000 }
+    expect(compaction.required(input(871_999, declared))).toBe(false)
+    expect(compaction.required(input(872_000, declared))).toBe(true)
+    const astra = { context: 1_050_000, input: 922_000, output: 128_000 }
+    expect(compaction.required(input(901_999, astra))).toBe(false)
+    expect(compaction.required(input(902_000, astra))).toBe(true)
+
+    for (const overlay of [false, true]) {
+      const runtime = LanguageModel.update(model, {
+        defaults: { generation: { maxTokens: 64_000 } },
+        route: model.route.with({
+          generation: { maxTokens: 48_000 },
+          ...(overlay ? { http: { body: { max_completion_tokens: 96_000 } } } : {}),
+        }),
+      })
+      const ceiling = overlay ? 904_000 : 936_000
+      for (const tokens of [ceiling - 1, ceiling]) {
+        const selected = input(tokens, declared)
+        expect(compaction.required({ ...selected, resolved: { ...selected.resolved, model: runtime } })).toBe(
+          tokens === ceiling,
+        )
+      }
+    }
+
     const assistant = input(79_000, contextLimited).messages[0]
     const tool = SessionMessage.AssistantTool.make({
       type: "tool",
@@ -407,7 +431,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       "x-opencode-session": sessionID,
       "x-opencode-client": "opencode",
     })
-    expect(requests[0]?.generation).toBeUndefined()
+    expect(requests[0]?.generation?.maxTokens).toBe(32_000)
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Use Effect services and generators.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("User shell pwd completed: /project")

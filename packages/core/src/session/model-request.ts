@@ -31,6 +31,7 @@ import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
 import { Tool } from "../tool.js"
 import { SessionModelTransport } from "./model-transport.js"
+import { SessionOutputBudget } from "./output-budget.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
@@ -228,6 +229,7 @@ export const layer = Layer.effect(
       )
       const entries = Object.entries(shaped.options)
       const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields
+      const maxTokens = generation.maxTokens ?? SessionOutputBudget.defaults(model)
       const providerOptions = Object.fromEntries(entries.filter(([k]) => !GENERATION_KEYS.has(k)))
       const root = session.fork?.sessionID ?? session.id
       const base = LLM.request({
@@ -249,7 +251,8 @@ export const layer = Layer.effect(
         messages: boundImages(unsupportedParts(shaped.messages, model.capabilities)),
         tools: Array.from(hooked, ([name, t]) => ({ ...t, name })),
         toolChoice: input.toolChoice,
-        generation: Object.keys(generation).length === 0 ? undefined : generation,
+        generation:
+          maxTokens === undefined && Object.keys(generation).length === 0 ? undefined : { ...generation, maxTokens },
         providerOptions: Object.keys(providerOptions).length === 0 ? undefined : providerOptions,
       })
 

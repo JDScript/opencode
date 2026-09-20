@@ -25,6 +25,7 @@ import type { SessionContext } from "./context.js"
 import { SessionHistory } from "./history.js"
 import type { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
+import { SessionOutputBudget } from "./output-budget.js"
 import { SessionProviderContext } from "./provider-context.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
@@ -39,7 +40,6 @@ import type { Instructions } from "../instructions/index.js"
 
 const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 15_000
-const OUTPUT_TOKEN_MAX = 32_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
@@ -754,7 +754,7 @@ export const layer = Layer.effect(
       const limit = input.resolved.limit
       const context = limit.context
       if (context <= 0) return false
-      const output = Math.min(limit.output, OUTPUT_TOKEN_MAX)
+      const output = SessionOutputBudget.effective(input.resolved) ?? 0
       const promptCeiling = Math.min(
         limit.input === undefined ? Number.POSITIVE_INFINITY : limit.input - config.buffer,
         context - Math.max(output, config.buffer),
