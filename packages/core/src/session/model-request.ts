@@ -33,6 +33,7 @@ import { QuestionTool } from "../tool/plugin/question.js"
 import { Tool } from "../tool.js"
 import { SessionAffinity } from "./affinity.js"
 import { SessionModelTransport } from "./model-transport.js"
+import { SessionOutputBudget } from "./output-budget.js" // FORK
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
@@ -256,8 +257,9 @@ export const layer = Layer.effect(
           model: model.ref,
           system: input.system,
           messages: input.messages,
+          // FORK: a limit the user configured on the model (canonical default or raw body field) stands.
           options:
-            kind === "primary" || kind === "compaction"
+            (kind === "primary" || kind === "compaction") && !SessionOutputBudget.decided(model.model)
               ? { maxTokens: outputLimit(model.limit, kind, input.inputTokens) }
               : {},
         },
