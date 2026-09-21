@@ -560,7 +560,8 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
-  it.effect("lowers image content in tool-result messages", () =>
+  // FORK: Claude keeps nested images; other models use the same-message cases below.
+  it.effect("keeps image content nested in Claude tool-result messages", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(
         LLM.request({
@@ -608,6 +609,83 @@ describe("Bedrock Converse route", () => {
       })
     }),
   )
+
+  // FORK: Exercise direct/profile IDs, both tool-result layouts, and the next assistant boundary.
+  for (const modelID of ["openai.gpt-oss-120b-1:0", "us.openai.gpt-oss-120b-1:0"]) {
+    for (const layout of ["single", "grouped", "separate"] as const) {
+      it.effect(`hoists ${layout} tool-result images for ${modelID}`, () =>
+        Effect.gen(function* () {
+          const files = [
+            { id: "tool_1", bytes: "AAAA", name: undefined },
+            ...(layout === "single" ? [] : [{ id: "tool_2", bytes: "BBBB", name: "second.png" }]),
+          ]
+          const results = files.map((file) =>
+            Message.tool({
+              id: file.id,
+              name: "read",
+              result: {
+                type: "content",
+                value: [
+                  { type: "file", uri: `data:image/png;base64,${file.bytes}`, mime: "image/png", name: file.name },
+                ],
+              },
+            }),
+          )
+          const prepared = yield* compileRequest(
+            LLM.request({
+              model: AmazonBedrock.configure({
+                baseURL: "https://bedrock-runtime.test",
+                apiKey: "test-bearer",
+              }).model(modelID),
+              messages: [
+                Message.user("Read the images."),
+                Message.assistant(files.map((file) => ToolCallPart.make({ id: file.id, name: "read", input: {} }))),
+                ...(layout === "grouped"
+                  ? [Message.make({ role: "tool", content: results.flatMap((result) => result.content) })]
+                  : results),
+                ...(layout === "separate" ? [Message.assistant("Read."), Message.user("Thanks.")] : []),
+              ],
+              cache: "none",
+            }),
+          )
+
+          expect(prepared.body.messages).toEqual([
+            { role: "user", content: [{ text: "Read the images." }] },
+            {
+              role: "assistant",
+              content: files.map((file) => ({ toolUse: { toolUseId: file.id, name: "read", input: {} } })),
+            },
+            {
+              role: "user",
+              content: [
+                ...files.map((file) => ({
+                  toolResult: {
+                    toolUseId: file.id,
+                    content: [
+                      {
+                        text:
+                          file.name === undefined
+                            ? "Image attached as a separate content block below."
+                            : 'Image "second.png" attached as a separate content block below.',
+                      },
+                    ],
+                    status: "success",
+                  },
+                })),
+                ...files.map((file) => ({ image: { format: "png", source: { bytes: file.bytes } } })),
+              ],
+            },
+            ...(layout === "separate"
+              ? [
+                  { role: "assistant", content: [{ text: "Read." }] },
+                  { role: "user", content: [{ text: "Thanks." }] },
+                ]
+              : []),
+          ])
+        }),
+      )
+    }
+  }
 
   it.effect("decodes text-delta + messageStop + metadata usage from binary event stream", () =>
     Effect.gen(function* () {

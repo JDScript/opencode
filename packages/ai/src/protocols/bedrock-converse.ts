@@ -28,6 +28,8 @@ import { BedrockAuth } from "./utils/bedrock-auth.js"
 import { AnthropicThinkingBinding } from "./utils/anthropic-thinking-binding.js"
 import { BedrockCache } from "./utils/bedrock-cache.js"
 import { BedrockMedia } from "./utils/bedrock-media.js"
+// FORK: Model-aware tool-result image hoisting; see FORK.md §3.
+import { BedrockToolImages } from "./utils/bedrock-tool-images.js"
 import { Lifecycle } from "./utils/lifecycle.js"
 import { MistralToolID } from "./utils/mistral-tool-id.js"
 import { ToolSchemaProjection } from "./utils/tool-schema.js"
@@ -304,6 +306,7 @@ const lowerToolCall = (part: ToolCallPart, normalizeID: (id: string) => string):
 const lowerToolResultContent = Effect.fn("BedrockConverse.lowerToolResultContent")(function* (
   part: ToolResultPart,
   documentNames: Set<string>,
+  images: BedrockToolImages.Collector, // FORK: Collect images outside unsupported tool results.
 ) {
   if (part.result.type === "text" || part.result.type === "error")
     return [{ text: ProviderShared.toolResultText(part) }]
@@ -324,7 +327,7 @@ const lowerToolResultContent = Effect.fn("BedrockConverse.lowerToolResultContent
       },
       documentNames,
     )
-    content.push(...media)
+    content.push(...images.lower(media, item.name)) // FORK: Preserve the filename in the placeholder.
   }
   return content
 })
@@ -333,11 +336,12 @@ const lowerToolResult = Effect.fn("BedrockConverse.lowerToolResult")(function* (
   part: ToolResultPart,
   documentNames: Set<string>,
   normalizeID: (id: string) => string,
+  images: BedrockToolImages.Collector, // FORK: Share the collector across merged tool results.
 ) {
   return {
     toolResult: {
       toolUseId: normalizeID(part.id),
-      content: yield* lowerToolResultContent(part, documentNames),
+      content: yield* lowerToolResultContent(part, documentNames, images), // FORK: Model-aware media placement.
       status: part.result.type === "error" ? "error" : "success",
     },
   } satisfies BedrockToolResultBlock
@@ -348,6 +352,7 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
   breakpoints: BedrockCache.Breakpoints,
 ) {
   const messages: BedrockMessage[] = []
+  const images = BedrockToolImages.collector(request.model.id) // FORK: Request-local pending images.
   const documentNames = new Set<string>()
   // Mistral can reject replay IDs even when they satisfy Converse's broader ID syntax.
   const normalizeID = request.model.id.includes("mistral.") ? MistralToolID.normalizer(request) : (id: string) => id
@@ -419,7 +424,10 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
           continue
         }
       }
-      if (content.length > 0) messages.push({ role: "assistant", content })
+      if (content.length > 0) {
+        images.flush(messages) // FORK: Finish the merged user message before the next assistant.
+        messages.push({ role: "assistant", content })
+      }
       continue
     }
 
@@ -427,7 +435,7 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
     for (const part of message.content) {
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("Bedrock Converse", "tool", ["tool-result"])
-      content.push(yield* lowerToolResult(part, documentNames, normalizeID))
+      content.push(yield* lowerToolResult(part, documentNames, normalizeID, images)) // FORK: Collect tool images.
       const cachePoint = BedrockCache.block(breakpoints, part.cache)
       if (cachePoint) content.push(cachePoint)
     }
@@ -437,6 +445,7 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
     else messages.push({ role: "user", content })
   }
 
+  images.flush(messages) // FORK: Keep trailing images in the same user message after all tool results.
   return messages
 })
 

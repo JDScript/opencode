@@ -25,6 +25,7 @@ Nine commits on top of upstream `v2`, one per concern; `git log --oneline upstre
 | `feat(core): run v1 plugins through a compatibility adapter`        | seam + fork-only  | `plugin/module.ts` fallback; `plugin/legacy-v1.ts`                                                                                       |
 | `feat(plugin): built-in OpenViking memory for v2`                   | seams + fork-only | `packages/plugin-openviking/`; registered in `plugin/internal.ts`; `plugin/superseded.ts` drops the v1 package in `plugin/supervisor.ts` |
 | `docs: add FORK.md for the v2 line`                                 | fork-only         | this file                                                                                                                                |
+| `fix(ai): hoist Bedrock tool-result images for models that reject them` | seam + fork-only | Model allowlist and same-message image hoisting in `protocols/utils/bedrock-tool-images.ts` |
 
 Commits are regrouped by concern rather than appended (last done 2026-09-20; the previous 18-commit history is
 at tag `fork/archive/pre-squash-20260920`). Web UI bumps amend the first commit's submodule pointer.
@@ -102,6 +103,7 @@ git grep -nE '(//|#) FORK' -- ':!FORK.md'
 | `packages/server/src/process.ts`                                                                                 | `""` password is not "missing"; the pre-router auth gate honours `ServerAuth.required`                |
 | `packages/core/src/mcp/client.ts`                                                                                | List tools/prompts/resources only when the server advertises the capability                           |
 | `packages/ai/src/protocols/bedrock-converse.ts`                                                                    | Apply capability-aware Claude binding defaults after body overlays, before signing                  |
+| `packages/ai/src/protocols/bedrock-converse.ts`, `packages/ai/test/provider/bedrock-converse.test.ts` | Hoist unsupported tool-result images after all tool results in the same user message; `utils/bedrock-tool-images.ts` owns the model allowlist |
 | `packages/ai/src/protocols/anthropic-messages.ts`                                                                 | Share existing Claude version and binding capability policy with Bedrock Converse                    |
 | `packages/core/src/session/runner/publish-llm-event.ts`                                                          | Publishes `session.tool.input.delta` (batched) alongside `Input.Ended`                                |
 | `packages/core/test/session-runner-tool-events.test.ts`                                                          | Replaces upstream's "deltas are not published" assertion with the batched-delta one                   |
