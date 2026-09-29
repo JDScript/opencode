@@ -272,8 +272,8 @@ export const OpenAIPlugin = define({
     })
     yield* ctx.model.transform((models) => {
       for (const model of models.list(Provider.ID.openai)) {
-        // ChatGPT-plan tokens only authorize codex-eligible models, and the
-        // subscription covers usage, so hide the rest and zero the cost.
+        // ChatGPT-plan tokens only authorize codex-eligible models, so hide the rest.
+        // FORK: catalog prices are kept so the UI can show the API-equivalent cost of subscription usage.
         models.update(model.providerID, model.id, (draft) => {
           if (!chatgpt) return
           if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
@@ -291,7 +291,6 @@ export const OpenAIPlugin = define({
             draft.enabled = false
             return
           }
-          draft.cost = []
           // Match Codex CLI so context consumption and subscription usage stay consistent between clients.
           draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
         })
