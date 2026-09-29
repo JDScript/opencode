@@ -2,8 +2,12 @@ import { Money } from "@opencode/schema/money"
 import { Agent } from "@opencode/schema/agent"
 import { Session } from "@opencode/schema/session"
 import { OpenAIResponses } from "@opencode/ai/protocols/openai-responses"
+import { LLMRequest } from "@opencode/ai"
+import { LLMClient, RequestExecutor } from "@opencode/ai/route"
+import { ModelResolver } from "@opencode/core/model-resolver"
 import { describe, expect } from "bun:test"
-import { ConfigProvider, DateTime, Effect } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer, Stream } from "effect"
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Credential } from "@opencode/core/credential"
 import { Integration } from "@opencode/core/integration"
 import { Location } from "@opencode/core/location"
@@ -61,6 +65,128 @@ const request = Effect.fn(function* (providerID: Provider.ID, baseURL: string) {
 })
 
 describe("OpenAIPlugin", () => {
+  for (const method of ["chatgpt-browser", "chatgpt-headless", "key"]) {
+    for (const fast of [false, true]) {
+      it.effect(`prepares output caps for ${method}${fast ? " fast mode" : ""} on HTTP and WebSocket`, () =>
+        Effect.gen(function* () {
+          const catalog = yield* Provider.Service
+          const models = yield* Model.Service
+          const credentials = yield* Credential.Service
+          const id = Model.ID.make(fast ? "gpt-6-astra-fast" : "gpt-6-astra")
+          yield* catalog.transform((catalog) => {
+            catalog.update(Provider.ID.openai, (draft) => {
+              draft.package = "@opencode/ai/providers/openai"
+            })
+            catalog.models.update(Provider.ID.openai, id, (draft) => {
+              draft.modelID = Model.ID.make("gpt-6-astra")
+              draft.limit = { context: 1_050_000, output: 128_000 }
+              draft.body = fast ? { service_tier: "priority" } : {}
+            })
+          })
+          yield* credentials.create({
+            integrationID: Integration.ID.make("openai"),
+            value:
+              method === "key"
+                ? Credential.Key.make({ type: "key", key: "sk-test" })
+                : Credential.OAuth.make({
+                    type: "oauth",
+                    methodID: Integration.MethodID.make(method),
+                    access: "chatgpt-token",
+                    refresh: "refresh",
+                    expires: Date.now() + 60_000,
+                  }),
+          })
+          yield* addPlugin()
+          const resolver = yield* ModelResolver.Service
+          const model = required(yield* resolver.resolve(Model.Ref.make({ providerID: Provider.ID.openai, id })))
+          expect(required(yield* models.get(Provider.ID.openai, id)).limit.output).toBe(128_000)
+          const requests = yield* SessionModelRequest.Service
+          const prepared = yield* requests.primary({
+            session: Session.Info.make({
+              id: Session.ID.make("ses_output_caps"),
+              projectID: Project.ID.global,
+              cost: Money.USD.zero,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+              location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
+            }),
+            agent: Agent.ID.make("build"),
+            model,
+            tools: { definitions: [], execute: () => Effect.die("unused tool execution") },
+            system: [],
+            messages: [],
+          })
+          expect(prepared.request.generation?.maxTokens).toBe(128_000)
+          for (const override of [undefined, 1024]) {
+            for (const transport of ["http", "websocket", "fallback"]) {
+              const request =
+                override === undefined
+                  ? prepared.request
+                  : LLMRequest.update(prepared.request, {
+                      http: {
+                        ...prepared.request.http,
+                        body: { ...prepared.request.http?.body, max_output_tokens: override },
+                      },
+                    })
+              const check = (body: Record<string, unknown>) => {
+                if (method === "key") expect(body.max_output_tokens).toBe(override ?? 128_000)
+                if (method !== "key") expect(body).not.toHaveProperty("max_output_tokens")
+                if (fast) expect(body.service_tier).toBe("priority")
+              }
+              const completed = JSON.stringify({ type: "response.completed", response: { id: "resp_test" } })
+              yield* LLMClient.stream(request, {
+                webSocket:
+                  transport !== "http"
+                    ? {
+                        execute: (exchange) =>
+                          Effect.gen(function* () {
+                            check(JSON.parse((yield* exchange.driver.create(undefined)).message))
+                            return {
+                              frames: transport === "fallback" ? exchange.fallback() : Stream.make(completed),
+                              complete: Effect.void,
+                            }
+                          }),
+                      }
+                    : undefined,
+              }).pipe(
+                Stream.runDrain,
+                Effect.provide(
+                  LLMClient.layer.pipe(
+                    Layer.provide(
+                      Layer.succeed(RequestExecutor.Service, {
+                        execute: (sent) =>
+                          Effect.gen(function* () {
+                            expect(transport).not.toBe("websocket")
+                            const http = yield* HttpClientRequest.toWeb(sent).pipe(Effect.orDie)
+                            check(JSON.parse(yield* Effect.promise(() => http.text())))
+                            return HttpClientResponse.fromWeb(
+                              sent,
+                              new Response(`data: ${completed}\n\n`, {
+                                headers: { "content-type": "text/event-stream" },
+                              }),
+                            )
+                          }),
+                      }),
+                    ),
+                    Layer.fresh,
+                  ),
+                ),
+              )
+            }
+          }
+        }).pipe(
+          Effect.provide(SessionModelRequest.layer),
+          Effect.provide(ModelResolver.layer),
+          Effect.provideService(SessionModelTransport.Service, {
+            bind: () => ({ execute: () => Effect.die("unused WebSocket execution") }),
+            close: () => Effect.void,
+            closeAll: Effect.void,
+          }),
+        ),
+      )
+    }
+  }
+
   it.effect("registers browser and headless ChatGPT OAuth methods", () =>
     Effect.gen(function* () {
       yield* addPlugin()
