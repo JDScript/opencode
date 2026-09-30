@@ -7047,6 +7047,86 @@
         "summary": "Cancel command connection"
       }
     },
+    "/api/fork/subscription-usage": {
+      "get": {
+        "tags": ["server.forkSubscriptionUsage"],
+        "operationId": "fork.subscriptionUsage",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "ForkSubscriptionUsage.Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForkSubscriptionUsage.Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LocationNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get subscription quota usage"
+      }
+    },
     "/api/mcp": {
       "get": {
         "tags": ["mcp"],
@@ -14912,6 +14992,136 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "ForkSubscriptionUsage.Provider": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["openai"]
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["ok", "not_connected", "unsupported_auth", "auth_required", "unavailable", "rate_limited", "error"]
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForkSubscriptionUsage.Window"
+            }
+          },
+          "plan": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          }
+        },
+        "required": ["providerID", "status", "windows", "stale"],
+        "additionalProperties": false
+      },
+      "ForkSubscriptionUsage.Result": {
+        "type": "object",
+        "properties": {
+          "providers": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ForkSubscriptionUsage.Provider"
+              }
+            ],
+            "maxItems": 1,
+            "minItems": 1
+          }
+        },
+        "required": ["providers"],
+        "additionalProperties": false
+      },
+      "ForkSubscriptionUsage.Window": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "usedPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "remainingPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "resetsAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "windowSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          }
+        },
+        "required": ["id", "label", "usedPercent", "remainingPercent"],
+        "additionalProperties": false
+      },
       "Form.Answer": {
         "type": "object",
         "additionalProperties": {
@@ -20547,6 +20757,9 @@
     {
       "name": "integration",
       "description": "Integration discovery and authentication routes."
+    },
+    {
+      "name": "server.forkSubscriptionUsage"
     },
     {
       "name": "mcp",

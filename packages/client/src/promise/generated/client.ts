@@ -138,6 +138,8 @@ import type {
   IntegrationCommandStatusOutput,
   IntegrationCommandCancelInput,
   IntegrationCommandCancelOutput,
+  ServerForkSubscriptionUsageForkSubscriptionUsageInput,
+  ServerForkSubscriptionUsageForkSubscriptionUsageOutput,
   McpListInput,
   McpListOutput,
   McpAddInput,
@@ -1343,6 +1345,25 @@ export function make(options: ClientOptions) {
               successStatus: 204,
               declaredStatuses: [400, 401, 404],
               empty: true,
+            },
+            requestOptions,
+          ),
+      },
+    },
+    "server.forkSubscriptionUsage": {
+      fork: {
+        subscriptionUsage: (
+          input?: ServerForkSubscriptionUsageForkSubscriptionUsageInput,
+          requestOptions?: RequestOptions,
+        ) =>
+          request<ServerForkSubscriptionUsageForkSubscriptionUsageOutput>(
+            {
+              method: "GET",
+              path: `/api/fork/subscription-usage`,
+              query: { location: input?.["location"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404],
+              empty: false,
             },
             requestOptions,
           ),

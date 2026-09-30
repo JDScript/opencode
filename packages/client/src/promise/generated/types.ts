@@ -281,6 +281,15 @@ export type IntegrationCommandAttemptStatus =
       time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
     }
 
+export type ForkSubscriptionUsageWindow = {
+  id: string
+  label: string
+  usedPercent: number | "Infinity" | "-Infinity" | "NaN"
+  remainingPercent: number | "Infinity" | "-Infinity" | "NaN"
+  resetsAt?: number | "Infinity" | "-Infinity" | "NaN"
+  windowSeconds?: number | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type McpStatusConnected = { status: "connected" }
 
 export type McpStatusPending = { status: "pending" }
@@ -1511,6 +1520,17 @@ export type ConnectionCredentialInfo = {
 
 export type ConnectionEnvInfo = { type: "env"; name: string; status?: ConnectionStatus }
 
+export type ForkSubscriptionUsageProvider = {
+  providerID: "openai"
+  status: "ok" | "not_connected" | "unsupported_auth" | "auth_required" | "unavailable" | "rate_limited" | "error"
+  windows: Array<ForkSubscriptionUsageWindow>
+  plan?: string
+  updatedAt?: number | "Infinity" | "-Infinity" | "NaN"
+  stale: boolean
+  message?: string
+  retryAt?: number | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type McpServer = {
   name: string
   status: McpStatusConnected | McpStatusPending | McpStatusDisabled | McpStatusFailed | McpStatusNeedsAuth
@@ -1935,6 +1955,8 @@ export type CredentialKey = {
 }
 
 export type ConnectionInfo = ConnectionCredentialInfo | ConnectionEnvInfo
+
+export type ForkSubscriptionUsageResult = { providers: [ForkSubscriptionUsageProvider] }
 
 export type FormField1 =
   | FormStringField1
@@ -5819,6 +5841,12 @@ export type IntegrationCommandCancelInput = {
 }
 
 export type IntegrationCommandCancelOutput = void
+
+export type ServerForkSubscriptionUsageForkSubscriptionUsageInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type ServerForkSubscriptionUsageForkSubscriptionUsageOutput = ForkSubscriptionUsageResult
 
 export type McpListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
