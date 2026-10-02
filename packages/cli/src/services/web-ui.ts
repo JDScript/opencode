@@ -27,7 +27,10 @@ export const handler = Effect.fn("cli.web-ui.handler")(function* (options?: { re
 function serveUI(request: HttpServerRequest.HttpServerRequest, url: URL, assets: AssetMap) {
   const key = url.pathname.replace(/^\//, "")
   const requested = assets[key]
-  if ((key.startsWith("_assets/") || key.startsWith("icons/")) && requested === undefined)
+  if (
+    (key === "preview-shell.html" || key.startsWith("_assets/") || key.startsWith("icons/")) &&
+    requested === undefined
+  )
     return Effect.succeed(HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } }))
   const name = requested !== undefined ? key : "index.html"
   const file = requested ?? assets["index.html"]
@@ -35,14 +38,18 @@ function serveUI(request: HttpServerRequest.HttpServerRequest, url: URL, assets:
   if (request.method !== "GET" && request.method !== "HEAD")
     return Effect.succeed(HttpServerResponse.empty({ status: 405 }))
   const html = name === "index.html"
-  const revalidate = html || name === "sw.js" || name === "registerSW.js"
+  const preview = name === "preview-shell.html"
+  const revalidate = html || preview || name === "sw.js" || name === "registerSW.js"
   const headers = {
     "content-type": FSUtil.mimeType(name),
     "cache-control": revalidate ? "no-cache" : "public, max-age=31536000, immutable",
-    "content-security-policy": html
-      ? cspForHtml(typeof file === "string" ? file : Buffer.from(file).toString())
-      : csp(),
+    "content-security-policy": preview
+      ? cspForPreview()
+      : html
+        ? cspForHtml(typeof file === "string" ? file : Buffer.from(file).toString())
+        : csp(),
     "x-content-type-options": "nosniff",
+    ...(preview ? { "referrer-policy": "no-referrer" } : {}),
   }
   return Effect.succeed(
     request.method === "HEAD"
@@ -64,6 +71,12 @@ function cspForHtml(body: string) {
     /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(["'])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
   )
   return csp(match ? createHash("sha256").update(match[2]).digest("base64") : "")
+}
+
+function cspForPreview() {
+  // The response sandbox also isolates direct visits; never grant allow-same-origin.
+  // Only about: bases are allowed so packaged reports cannot resolve relative assets against the host.
+  return "default-src 'none'; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; img-src http: https: data: blob:; media-src http: https: data: blob:; font-src http: https: data: blob:; connect-src http: https: data: blob:; base-uri about:; sandbox allow-scripts allow-forms allow-popups allow-downloads"
 }
 
 export * as WebUi from "./web-ui"
