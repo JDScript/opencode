@@ -60,6 +60,8 @@ describe("Session.revert files", () => {
         const database = yield* Database.Service
         const bus = yield* Bus.Service
         const created = yield* session.create({ location: { directory: AbsolutePath.make(directory) } })
+        yield* session.setGoal({ sessionID: created.id, text: "Preserve the rename objective", autoContinue: true })
+        yield* bus.publish(SessionEvent.Goal.Continued, { sessionID: created.id })
         const prompt = yield* session.prompt({ sessionID: created.id, text: "Rename the file", resume: false })
         yield* SessionInbox.promote(database.db, bus, created.id, "steer")
 
@@ -93,6 +95,7 @@ describe("Session.revert files", () => {
 
           yield* Effect.promise(() => Bun.write(path.join(directory, "unrelated.txt"), "Keep this later edit.\n"))
           const reverted = yield* session.revert.stage({ sessionID: created.id, messageID: prompt.id })
+          expect(yield* session.getGoal(created.id)).toMatchObject({ status: "paused", continuationsUsed: 1 })
           expect({
             original: yield* Effect.promise(() => Bun.file(original).exists()),
             renamed: yield* Effect.promise(() => Bun.file(renamed).exists()),
@@ -107,6 +110,7 @@ describe("Session.revert files", () => {
           )
 
           yield* session.revert.clear(created.id)
+          expect(yield* session.getGoal(created.id)).toMatchObject({ status: "paused", continuationsUsed: 1 })
           expect(yield* Effect.promise(() => Bun.file(original).exists())).toBe(false)
           expect(yield* Effect.promise(() => Bun.file(renamed).text())).toBe("Preserve this content.\n")
           expect(yield* Effect.promise(() => Bun.file(path.join(directory, "unrelated.txt")).text())).toBe(

@@ -87,6 +87,8 @@ import { Expected } from "./lib/session-message"
 import { permissionLayer } from "./lib/permission"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@opencode/core/codemode/instructions"
+import { SessionGoal } from "@opencode/core/session/goal"
+import { GoalTool } from "@opencode/core/tool/plugin/goal"
 
 const emptyCodeMode = `\n\n${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}`
 type ToolBarrier = {
@@ -121,6 +123,14 @@ const identity = (providerID: string, id: string) =>
 const fakeIdentity = identity("fake", "fake-model")
 const replacementIdentity = identity("fake", "replacement")
 const gptIdentity = identity("openai", "gpt-5")
+test("validates Unicode objective length and finite session goal limits", () => {
+  const accepts = Schema.is(SessionGoal.Set)
+  expect(accepts({ text: "😀".repeat(4000), maxContinuations: 100 })).toBe(true)
+  expect(accepts({ text: "😀".repeat(4001) })).toBe(false)
+  expect(accepts({ text: " \n\t " })).toBe(false)
+  for (const maxContinuations of [0, 101, 1.5, Infinity])
+    expect(accepts({ text: "Valid objective", maxContinuations })).toBe(false)
+})
 const replacementModel = testModel("replacement")
 const compactModel = testModel("compact", { context: 4_000, output: 50 })
 const fullOutputModel = testModel("full-output", { context: 262_144, output: 262_144 })
@@ -205,6 +215,7 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     }).pipe(Effect.andThen(Deferred.succeed(barrier.release, undefined)), Effect.asVoid)
   return {
     currentModel: model,
+    toolsSupported: true,
     compaction,
     modelResolveHook: Effect.void,
     systemBaseline: "Initial context",
@@ -321,7 +332,7 @@ const layer = Layer.unwrap(
           Effect.map(() => {
             const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
             return SessionRunnerModel.resolved(selected, {
-              capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+              capabilities: { tools: state.toolsSupported, input: ["text", "image"], output: ["text"] },
               cost: [],
               limit: modelLimits.get(String(selected.id)) ?? defaultModelLimit,
               variant: session.model?.variant,
@@ -571,6 +582,15 @@ const setup = Effect.gen(function* () {
 })
 
 type Scenario = Effect.Success<typeof setup>
+// Instruction-epoch assertions exclude the independent request-time goal reminder.
+const instructionSystem = (request?: LLMRequest) =>
+  request?.system.filter((part) => part.text !== SessionGoal.reminder()).map((part) => part.text)
+const goalTools = Effect.gen(function* () {
+  const tools = yield* Tool.Service
+  yield* GoalTool.Plugin.effect(
+    host({ tool: { ...host().tool, transform: tools.transform, reload: tools.reload } }),
+  ).pipe(Effect.provide(permissionLayer({ assert: () => Effect.void })))
+})
 const scenario = (
   name: string,
   body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
@@ -949,6 +969,382 @@ const watchRename = Effect.fnUntraced(function* (sessionID: Session.ID) {
 })
 
 describe("SessionRunnerLLM", () => {
+  scenario("allows a hook-renamed reporter with its valid execution mapping", function* (s) {
+    yield* goalTools
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        event.tools.report_objective = event.tools.goal_report
+        delete event.tools.goal_report
+      }),
+    )
+    const goal = yield* s.session.setGoal({ sessionID, text: "Renamed reporter", autoContinue: true })
+    if (!goal) throw new Error("Missing goal")
+    yield* s.llm.push(
+      TestLLM.text("Progress", "goal-rename-first"),
+      TestLLM.tool("goal-rename-report", "report_objective", {
+        id: goal.id,
+        revision: goal.revision,
+        status: "completed",
+      }),
+      TestLLM.text("Done", "goal-rename-done"),
+    )
+    yield* s.runPrompt("Start")
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({ status: "completed", continuationsUsed: 1 })
+  })
+
+  scenario("supplies no-active-goal guidance for imported history without goal state", function* (s) {
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Old imported summary: continue the former objective automatically",
+    })
+    yield* s.llm.push(TestLLM.text("Only the current request", "goal-absent"))
+    yield* s.runPrompt("Answer my latest question")
+    expect(s.requests[0]?.system.at(-1)?.text).toBe(SessionGoal.reminder())
+    expect(s.requests).toHaveLength(1)
+  })
+
+  scenario("blocks the adopted goal when automatic boundary preparation fails", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Original", autoContinue: true })
+    yield* s.admit("Start")
+    const gate = yield* s.llm.gate
+    yield* s.llm.push(TestLLM.text("Progress", "goal-preparation"))
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    yield* gate.started
+    yield* s.session.updateGoal({ sessionID, text: "Edited before preparation" })
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "context", () => Effect.die("Preparation failed"))
+    yield* gate.release
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "Edited before preparation",
+      status: "blocked",
+      continuationsUsed: 0,
+    })
+  })
+
+  for (const unavailable of ["missing", "denied", "hook", "model"] as const) {
+    scenario(`blocks automation without a usable reporter: ${unavailable}`, function* (s) {
+      if (unavailable !== "missing") yield* goalTools
+      if (unavailable === "denied") {
+        yield* s.session.setPermissions({
+          sessionID,
+          permissions: [{ action: "goal_report", resource: "*", effect: "deny" }],
+        })
+      }
+      if (unavailable === "hook") {
+        const hooks = yield* PluginHooks.Service
+        yield* hooks.register("session", "context", (event) =>
+          Effect.sync(() => {
+            delete event.tools.goal_report
+          }),
+        )
+      }
+      if (unavailable === "model") {
+        s.toolsSupported = false
+      }
+      yield* s.session.setGoal({ sessionID, text: "Needs terminal reporting", autoContinue: true })
+      yield* s.llm.push(TestLLM.text("Initial user work", "goal-no-reporter"))
+      yield* s.runPrompt("Do ordinary work first")
+      expect(s.requests).toHaveLength(1)
+      expect(yield* s.session.getGoal(sessionID)).toMatchObject({ status: "blocked", continuationsUsed: 0 })
+    })
+  }
+
+  scenario("blocks the edited goal actually adopted by a failing automatic continuation", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Original", autoContinue: true })
+    yield* s.admit("Start")
+    const gate = yield* s.llm.gate
+    yield* s.llm.push(TestLLM.text("Initial progress", "goal-edit-first"), Stream.fail(invalidRequest()))
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    yield* gate.started
+    yield* s.session.updateGoal({ sessionID, text: "Edited objective" })
+    yield* gate.release
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "Edited objective",
+      status: "blocked",
+      continuationsUsed: 1,
+    })
+  })
+
+  scenario("does not block an unrelated replacement when old automatic work fails", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Old objective", autoContinue: true })
+    yield* s.admit("Start")
+    const started = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    yield* s.llm.push(
+      TestLLM.text("Progress", "goal-stale-first"),
+      Stream.unwrap(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release)
+          return Stream.fail(invalidRequest())
+        }),
+      ),
+    )
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    yield* Deferred.await(started)
+    yield* s.session.setGoal({ sessionID, text: "Unrelated replacement", autoContinue: true })
+    yield* Deferred.succeed(release, undefined)
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "Unrelated replacement",
+      status: "active",
+      continuationsUsed: 0,
+    })
+  })
+  scenario("persists goal edits, rejects stale reports, and never inherits fork automation", function* (s) {
+    const goals = yield* SessionGoal.make()
+    const first = yield* s.session.setGoal({ sessionID, text: "Finish the objective" })
+    expect(first).toMatchObject({ status: "active", autoContinue: false, maxContinuations: 10, continuationsUsed: 0 })
+    expect(s.requests).toHaveLength(0)
+    yield* s.bus.publish(SessionEvent.Goal.Continued, { sessionID })
+    yield* s.session.updateGoal({ sessionID, text: "Finish the edited objective", maxContinuations: 12 })
+    yield* s.session.pauseGoal(sessionID)
+    yield* s.session.resumeGoal(sessionID)
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "Finish the edited objective",
+      continuationsUsed: 1,
+      maxContinuations: 12,
+      status: "active",
+    })
+    if (!first) throw new Error("Missing initial goal")
+    expect(
+      (yield* goals
+        .report(sessionID, { id: first.id, revision: first.revision, status: "completed" })
+        .pipe(Effect.exit))._tag,
+    ).toBe("Failure")
+    yield* s.llm.push(TestLLM.text("Answer", "goal-fork"))
+    yield* s.runPrompt("Work on it")
+    const fork = yield* s.session.fork({ sessionID })
+    expect(fork.goal).toBeUndefined()
+    const replacement = yield* s.session.setGoal({ sessionID, text: "A new objective" })
+    expect(replacement?.id).not.toBe(first.id)
+    expect(replacement?.continuationsUsed).toBe(0)
+    yield* s.session.clearGoal(sessionID)
+    expect(yield* s.session.getGoal(sessionID)).toBeUndefined()
+    yield* s.llm.push(TestLLM.text("Cleared", "goal-clear"))
+    yield* s.runPrompt("Only answer this request")
+    expect(s.requests.at(-1)?.system.at(-1)?.text).toContain("no active objective")
+  })
+
+  scenario("continues an opted-in goal within its cumulative limit and pauses exhaustion", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Finish this task", autoContinue: true, maxContinuations: 2 })
+    yield* s.llm.push(
+      TestLLM.text("Progress one", "goal-one"),
+      TestLLM.text("Progress two", "goal-two"),
+      TestLLM.text("Progress three", "goal-three"),
+    )
+    yield* s.runPrompt("Start")
+    expect(s.requests).toHaveLength(3)
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({ status: "paused", continuationsUsed: 2 })
+    yield* s.session.resumeGoal(sessionID)
+    expect(s.requests).toHaveLength(3)
+    yield* s.llm.push(TestLLM.text("Manual response", "goal-manual"))
+    yield* s.runPrompt("Continue manually")
+    expect(s.requests).toHaveLength(4)
+    expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(2)
+  })
+
+  scenario("stops automatic requests when the goal is paused or cleared while in flight", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Bounded work", autoContinue: true })
+    yield* s.admit("Start")
+    const gate = yield* s.llm.gate
+    yield* s.llm.push(TestLLM.text("One", "goal-pause"))
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* gate.started
+    yield* s.session.pauseGoal(sessionID)
+    yield* gate.release
+    yield* Fiber.join(run)
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.session.getGoal(sessionID))?.status).toBe("paused")
+    yield* s.session.resumeGoal(sessionID)
+    yield* s.admit("Start again")
+    const next = yield* s.llm.gate
+    yield* s.llm.push(TestLLM.text("Two", "goal-clear-active"))
+    const second = yield* s.resume.pipe(Effect.forkChild)
+    yield* next.started
+    yield* s.session.clearGoal(sessionID)
+    yield* next.release
+    yield* Fiber.join(second)
+    expect(s.requests).toHaveLength(2)
+  })
+
+  scenario("prioritizes admitted user input before an automatic goal continuation", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Standing objective", autoContinue: true, maxContinuations: 1 })
+    yield* s.admit("Initial scope")
+    yield* s.llm.push(
+      TestLLM.text("First", "goal-priority-one"),
+      TestLLM.text("Answer latest", "goal-priority-two"),
+      TestLLM.text("Goal progress", "goal-priority-three"),
+    )
+    const gate = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* gate.started
+    yield* s.session.prompt({ sessionID, text: "Latest user request", delivery: "queue", resume: false })
+    yield* gate.release
+    yield* Fiber.join(run)
+    expect(s.requests[1]?.messages.at(-1)?.content).toContainEqual(Message.text("Latest user request"))
+    expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(1)
+    expect(s.requests[2]?.system.at(-1)?.text).toContain("latest user request")
+  })
+
+  for (const action of ["pause", "clear", "replace"] as const) {
+    scenario(`stops the automatic tool continuation after goal ${action}`, function* (s) {
+      yield* goalTools
+      yield* s.session.setGoal({ sessionID, text: "Original objective", autoContinue: true })
+      yield* s.admit("Start")
+      yield* s.llm.push(
+        TestLLM.text("Initial progress", "goal-auto-initial"),
+        TestLLM.tool("goal-auto-tool", "echo", { text: "Automatic work" }),
+      )
+      const tools = yield* s.blockTools()
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* tools.started
+      expect(
+        (yield* s.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())?.execution_goal,
+      ).not.toBeNull()
+      if (action === "pause") yield* s.session.pauseGoal(sessionID)
+      if (action === "clear") yield* s.session.clearGoal(sessionID)
+      if (action === "replace")
+        yield* s.session.setGoal({ sessionID, text: "Replacement objective", autoContinue: true })
+      yield* tools.release
+      yield* Fiber.join(run)
+      expect(s.requests).toHaveLength(2)
+      if (action === "replace") expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(0)
+    })
+  }
+
+  scenario("clears autonomous claim origin atomically when new user input is promoted", function* (s) {
+    yield* goalTools
+    yield* s.session.setGoal({ sessionID, text: "Original objective", autoContinue: true })
+    yield* s.admit("Start")
+    yield* s.llm.push(
+      TestLLM.text("Initial progress", "goal-origin-initial"),
+      TestLLM.tool("goal-origin-tool", "echo", { text: "Automatic work" }),
+      TestLLM.text("User response", "goal-origin-user"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(
+      (yield* s.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())?.execution_goal,
+    ).not.toBeNull()
+    yield* s.admit("New user scope")
+    const gate = yield* s.llm.gate
+    yield* tools.release
+    yield* gate.started
+    expect(
+      (yield* s.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())?.execution_goal,
+    ).toBeNull()
+    yield* s.session.pauseGoal(sessionID)
+    yield* gate.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("retains the current goal after compaction without assigning the auxiliary task goal work", function* (s) {
+    yield* s.session.setGoal({ sessionID, text: "Objective survives compaction" })
+    yield* s.llm.push(
+      TestLLM.text("First", "goal-context-one"),
+      TestLLM.text("## Objective\n- Preserve user objective", "goal-summary"),
+      TestLLM.text("Second", "goal-context-two"),
+    )
+    yield* s.runPrompt("Start")
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+    yield* s.runPrompt("Continue within the latest scope")
+    expect(s.requests[0]?.system.at(-1)?.text).toContain("Objective survives compaction")
+    expect(s.requests[1]?.system.some((part) => part.text.includes("Session goal context"))).toBe(false)
+    expect(s.requests[2]?.system.at(-1)?.text).toContain("Objective survives compaction")
+  })
+
+  scenario("does not automatically continue a child or an empty assistant response", function* (s) {
+    yield* s.session.setGoal({ sessionID, text: "No empty loops", autoContinue: true })
+    yield* s.llm.push(TestLLM.text("", "goal-empty"))
+    yield* s.runPrompt("Start")
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.session.getGoal(sessionID))?.status).toBe("blocked")
+    yield* s.db.update(SessionTable).set({ parent_id: otherSessionID }).where(eq(SessionTable.id, sessionID)).run()
+    yield* s.session.setGoal({ sessionID, text: "Child task", autoContinue: true })
+    yield* s.llm.push(TestLLM.text("Child response", "goal-child"))
+    yield* s.runPrompt("Work once")
+    expect(s.requests).toHaveLength(2)
+    expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(0)
+  })
+
+  scenario("does not turn the agent step limit into a fresh autonomous allowance", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 1
+      }),
+    )
+    yield* s.session.setGoal({ sessionID, text: "Respect the agent step limit", autoContinue: true })
+    yield* s.llm.push(TestLLM.text("Step limit reached", "goal-step-limit"))
+    yield* s.runPrompt("Start")
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(0)
+  })
+
+  scenario("goal tools expose only read and terminal reports and reject objective mutation", function* (s) {
+    const tools = yield* Tool.Service
+    yield* GoalTool.Plugin.effect(
+      host({ tool: { ...host().tool, transform: tools.transform, reload: tools.reload } }),
+    ).pipe(Effect.provide(permissionLayer({ assert: () => Effect.void })))
+    const snapshot = yield* tools.snapshot([])
+    expect(snapshot.definitions.filter((tool) => tool.name.startsWith("goal_")).map((tool) => tool.name)).toEqual([
+      "goal_read",
+      "goal_report",
+    ])
+    yield* s.session.setGoal({ sessionID, text: "User-owned objective" })
+    const goal = yield* s.session.getGoal(sessionID)
+    if (!goal) throw new Error("Missing goal")
+    yield* s.llm.push(
+      TestLLM.tool("goal-report-call", "goal_report", {
+        id: goal.id,
+        revision: goal.revision,
+        status: "active",
+        text: "Model override",
+        autoContinue: true,
+      }),
+      TestLLM.text("Done", "goal-report-done"),
+    )
+    yield* s.runPrompt("Do the task")
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "User-owned objective",
+      autoContinue: false,
+      status: "active",
+    })
+    yield* s.llm.push(
+      TestLLM.tool("goal-valid-report", "goal_report", {
+        id: goal.id,
+        revision: goal.revision,
+        status: "completed",
+        text: "Model override",
+        autoContinue: true,
+      }),
+      TestLLM.text("Done", "goal-valid-done"),
+    )
+    yield* s.runPrompt("Report the result")
+    expect(
+      (yield* s.messages)
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === "goal-valid-report"),
+    ).toMatchObject({ state: { status: "completed" } })
+    expect(yield* s.session.getGoal(sessionID)).toMatchObject({
+      text: "User-owned objective",
+      autoContinue: false,
+      status: "completed",
+    })
+  })
+
   scenario("generates the title while the first model step is still running", function* (s) {
     yield* prepareTitleGeneration
 
@@ -1578,7 +1974,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
     yield* s.session.resume(forked.id)
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, fakeIdentity, "Latest context"])
+    expect(instructionSystem(s.requests.at(-1))).toEqual([defaultSystem, fakeIdentity, "Latest context"])
     // Copied history keeps the frozen chronological update; no new update is emitted.
     expect(systemTexts(s.requests.at(-1)!)).toContain("Changed context")
     expect(systemTexts(s.requests.at(-1)!)).not.toContain("Latest context")
@@ -1641,7 +2037,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests).toHaveLength(1)
-    expect(s.requests[0]?.system.map((part) => part.text)).toEqual([defaultSystem, fakeIdentity, "Initial context"])
+    expect(instructionSystem(s.requests[0])).toEqual([defaultSystem, fakeIdentity, "Initial context"])
     expect(messageRoles(s.requests[0])).toEqual(["user", "user"])
     // The projected row is authoritative: a missing row admits a fresh baseline
     // instead of rebuilding from durable events.
@@ -1676,7 +2072,7 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests[1][field]).toEqual(s.requests[0][field])
     expect(s.requests[0].messages).toHaveLength(1)
     expect(s.requests[1].messages.slice(0, 1)).toEqual([...s.requests[0].messages])
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, fakeIdentity, "Initial context"],
     ])
@@ -1715,7 +2111,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-provider-prompt"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
+    expect(instructionSystem(s.requests.at(-1))).toEqual([
       expect.stringContaining("# Delegation"),
       gptIdentity,
       "Initial context",
@@ -1736,7 +2132,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-empty-agent-system"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
+    expect(instructionSystem(s.requests.at(-1))).toEqual([
       expect.stringContaining("# Delegation"),
       gptIdentity,
       "Initial context",
@@ -1756,11 +2152,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-build"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      "Build agent instructions",
-      fakeIdentity,
-      "Initial context",
-    ])
+    expect(instructionSystem(s.requests.at(-1))).toEqual(["Build agent instructions", fakeIdentity, "Initial context"])
   })
 
   scenario("uses the configured default agent system for omitted-agent sessions", function* (s) {
@@ -1781,11 +2173,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-reviewer"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      "Reviewer instructions",
-      fakeIdentity,
-      "Initial context",
-    ])
+    expect(instructionSystem(s.requests.at(-1))).toEqual(["Reviewer instructions", fakeIdentity, "Initial context"])
     expect((yield* s.messages)[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
   })
 
@@ -1808,11 +2196,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(TestLLM.text("Done", "text-selected"))
     yield* s.resume
 
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([
-      "Reviewer instructions",
-      fakeIdentity,
-      "Initial context",
-    ])
+    expect(instructionSystem(s.requests.at(-1))).toEqual(["Reviewer instructions", fakeIdentity, "Initial context"])
     expect((yield* s.messages)[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
   })
 
@@ -1853,7 +2237,7 @@ describe("SessionRunnerLLM", () => {
     })
     yield* s.runPrompt("Second")
 
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context\n\nBuild skills"],
       [defaultSystem, fakeIdentity, "Initial context\n\nBuild skills"],
     ])
@@ -1876,7 +2260,7 @@ describe("SessionRunnerLLM", () => {
     })
     yield* s.runPrompt("First")
 
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context\n\nBuild skills"],
     ])
   })
@@ -1895,9 +2279,7 @@ describe("SessionRunnerLLM", () => {
     })
     yield* s.runPrompt("First")
     expect(s.requests.map((request) => request.model)).toEqual([model])
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
-      [defaultSystem, fakeIdentity, "Initial context"],
-    ])
+    expect(s.requests.map(instructionSystem)).toEqual([[defaultSystem, fakeIdentity, "Initial context"]])
   })
 
   scenario("admits removed context as a chronological System message", function* (s) {
@@ -1918,7 +2300,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("First")
 
     // String values render verbatim inside the initial tagged block.
-    expect(s.requests[0]?.system.map((part) => part.text)).toEqual([
+    expect(instructionSystem(s.requests[0])).toEqual([
       defaultSystem,
       fakeIdentity,
       ["Initial context", "", '<context key="deploy-target">', "production", "</context>"].join("\n"),
@@ -2007,7 +2389,7 @@ describe("SessionRunnerLLM", () => {
     s.systemBaseline = "Replacement context"
     yield* s.runPrompt("Third")
 
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, replacementIdentity, "Initial context"],
@@ -2071,7 +2453,7 @@ describe("SessionRunnerLLM", () => {
     s.systemBaseline = "Replacement context"
     yield* s.runPrompt("Third")
 
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, replacementIdentity, "Initial context"],
       [defaultSystem, replacementIdentity, "Initial context"],
@@ -2089,7 +2471,7 @@ describe("SessionRunnerLLM", () => {
     s.systemBaseline = "Replacement context"
     yield* s.runPrompt("Second")
 
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, fakeIdentity, "Initial context"],
@@ -2539,7 +2921,9 @@ describe("SessionRunnerLLM", () => {
           "promptCacheKey",
           "http",
         ] as const)
-          expect(compact[field]).toEqual(normal[field])
+          expect(compact[field]).toEqual(
+            field === "system" ? normal.system.filter((part) => part.text !== SessionGoal.reminder()) : normal[field],
+          )
         expect(compact.toolChoice).toBeUndefined()
         expect(compact.system.map((part) => part.text)).toContain("Review the project carefully.")
         expect(requestAgents[2]).toBe(agentID)
@@ -2550,7 +2934,12 @@ describe("SessionRunnerLLM", () => {
         })
 
         // Compare wire content without the cache breakpoints that move to the new final message.
-        const before = yield* compileRequest(LLMRequest.update(normal, { cache: "none" }))
+        const before = yield* compileRequest(
+          LLMRequest.update(normal, {
+            cache: "none",
+            system: normal.system.filter((part) => part.text !== SessionGoal.reminder()),
+          }),
+        )
         const after = yield* compileRequest(LLMRequest.update(compact, { cache: "none" }))
         const key = route === OpenAIResponses.route ? "input" : "messages"
         const input = Schema.decodeUnknownSync(Schema.Array(Schema.Unknown))
@@ -3056,11 +3445,7 @@ describe("SessionRunnerLLM", () => {
     expect(resolutions).toBe(2)
     expect(s.requests).toHaveLength(3)
     expect(s.requests[2]?.model).toBe(replacementModel)
-    expect(s.requests[2]?.system.map((part) => part.text)).toEqual([
-      defaultSystem,
-      replacementIdentity,
-      "Initial context",
-    ])
+    expect(instructionSystem(s.requests[2])).toEqual([defaultSystem, replacementIdentity, "Initial context"])
     expect(systemTexts(s.requests[2])).toContain("Changed during compaction")
     expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Overflow summary\n</summary>")
     expect(userTexts(s.requests[2]).join("\n")).not.toContain("Queued during compaction")
@@ -3251,7 +3636,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Third")
 
     // Compaction already moved current values into the new epoch before the unavailable read.
-    expect(s.requests.at(-1)?.system.map((part) => part.text)).toEqual([defaultSystem, fakeIdentity, "Changed context"])
+    expect(instructionSystem(s.requests.at(-1))).toEqual([defaultSystem, fakeIdentity, "Changed context"])
     expect(systemTexts(s.requests.at(-1)!)).not.toContain("Changed context")
   })
 
@@ -3387,7 +3772,7 @@ describe("SessionRunnerLLM", () => {
     yield* Fiber.join(run)
 
     expect(s.requests.map((request) => request.model)).toEqual([model, replacementModel])
-    expect(s.requests.map((request) => request.system.map((part) => part.text))).toEqual([
+    expect(s.requests.map(instructionSystem)).toEqual([
       [defaultSystem, fakeIdentity, "Initial context"],
       [defaultSystem, replacementIdentity, "Initial context"],
     ])

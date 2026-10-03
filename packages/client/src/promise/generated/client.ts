@@ -27,6 +27,18 @@ import type {
   SessionActiveOutput,
   SessionGetInput,
   SessionGetOutput,
+  SessionGetGoalInput,
+  SessionGetGoalOutput,
+  SessionSetGoalInput,
+  SessionSetGoalOutput,
+  SessionUpdateGoalInput,
+  SessionUpdateGoalOutput,
+  SessionPauseGoalInput,
+  SessionPauseGoalOutput,
+  SessionResumeGoalInput,
+  SessionResumeGoalOutput,
+  SessionClearGoalInput,
+  SessionClearGoalOutput,
   SessionRemoveInput,
   SessionRemoveOutput,
   SessionForkInput,
@@ -624,6 +636,82 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      getGoal: (input: SessionGetGoalInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionGetGoalOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal`,
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      setGoal: (input: SessionSetGoalInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionSetGoalOutput }>(
+          {
+            method: "PUT",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal`,
+            body: {
+              text: input["text"],
+              autoContinue: input["autoContinue"],
+              maxContinuations: input["maxContinuations"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      updateGoal: (input: SessionUpdateGoalInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionUpdateGoalOutput }>(
+          {
+            method: "PATCH",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal`,
+            body: {
+              text: input["text"],
+              autoContinue: input["autoContinue"],
+              maxContinuations: input["maxContinuations"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 409],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      pauseGoal: (input: SessionPauseGoalInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionPauseGoalOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal/pause`,
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 409],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      resumeGoal: (input: SessionResumeGoalInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionResumeGoalOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal/resume`,
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 409],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      clearGoal: (input: SessionClearGoalInput, requestOptions?: RequestOptions) =>
+        request<SessionClearGoalOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/goal`,
+            successStatus: 204,
+            declaredStatuses: [400, 401, 404],
+            empty: true,
+          },
+          requestOptions,
+        ),
       remove: (input: SessionRemoveInput, requestOptions?: RequestOptions) =>
         request<SessionRemoveOutput>(
           {

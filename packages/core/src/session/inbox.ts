@@ -1,6 +1,6 @@
 export * as SessionInbox from "./inbox.js"
 
-import { and, asc, eq, or } from "drizzle-orm"
+import { and, asc, eq, or, sql } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import {
@@ -22,7 +22,7 @@ import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 import { SessionSchema } from "./schema.js"
-import { SessionInboxTable, SessionMessageTable } from "./sql.js"
+import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -467,10 +467,22 @@ const publish = Effect.fn("SessionInbox.publish")(function* (
       const entry = fromRow(row)
       if (entry.type === "compaction") return Effect.die(new LifecycleConflict({ id: entry.id }))
       return bus
-        .publish(SessionEvent.InboxDelivered, {
-          sessionID,
-          inboxID: entry.id,
-        })
+        .publish(
+          SessionEvent.InboxDelivered,
+          {
+            sessionID,
+            inboxID: entry.id,
+          },
+          {
+            commit: () =>
+              db
+                .update(SessionTable)
+                .set({ execution_goal: null, time_updated: sql`${SessionTable.time_updated}` })
+                .where(eq(SessionTable.id, sessionID))
+                .run()
+                .pipe(Effect.orDie, Effect.asVoid),
+          },
+        )
         .pipe(
           Effect.catchDefect((defect) =>
             defect instanceof LifecycleConflict

@@ -240,6 +240,48 @@ export type SessionGetInput = { readonly sessionID: Session.ID }
 export type SessionGetOutput = Session.Info
 export type SessionGetOperation<E = never> = (input: SessionGetInput) => Effect.Effect<SessionGetOutput, E>
 
+export type SessionGetGoalInput = { readonly sessionID: Session.ID }
+export type SessionGetGoalOutput = Session.Goal | null
+export type SessionGetGoalOperation<E = never> = (input: SessionGetGoalInput) => Effect.Effect<SessionGetGoalOutput, E>
+
+export type SessionSetGoalInput = {
+  readonly sessionID: Session.ID
+  readonly text: string
+  readonly autoContinue?: boolean | undefined
+  readonly maxContinuations?: number | undefined
+}
+export type SessionSetGoalOutput = Session.Goal | null
+export type SessionSetGoalOperation<E = never> = (input: SessionSetGoalInput) => Effect.Effect<SessionSetGoalOutput, E>
+
+export type SessionUpdateGoalInput = {
+  readonly sessionID: Session.ID
+  readonly text?: string | undefined
+  readonly autoContinue?: boolean | undefined
+  readonly maxContinuations?: number | undefined
+}
+export type SessionUpdateGoalOutput = Session.Goal | null
+export type SessionUpdateGoalOperation<E = never> = (
+  input: SessionUpdateGoalInput,
+) => Effect.Effect<SessionUpdateGoalOutput, E>
+
+export type SessionPauseGoalInput = { readonly sessionID: Session.ID }
+export type SessionPauseGoalOutput = Session.Goal | null
+export type SessionPauseGoalOperation<E = never> = (
+  input: SessionPauseGoalInput,
+) => Effect.Effect<SessionPauseGoalOutput, E>
+
+export type SessionResumeGoalInput = { readonly sessionID: Session.ID }
+export type SessionResumeGoalOutput = Session.Goal | null
+export type SessionResumeGoalOperation<E = never> = (
+  input: SessionResumeGoalInput,
+) => Effect.Effect<SessionResumeGoalOutput, E>
+
+export type SessionClearGoalInput = { readonly sessionID: Session.ID }
+export type SessionClearGoalOutput = void
+export type SessionClearGoalOperation<E = never> = (
+  input: SessionClearGoalInput,
+) => Effect.Effect<SessionClearGoalOutput, E>
+
 export type SessionRemoveInput = { readonly sessionID: Session.ID }
 export type SessionRemoveOutput = void
 export type SessionRemoveOperation<E = never> = (input: SessionRemoveInput) => Effect.Effect<SessionRemoveOutput, E>
@@ -462,6 +504,7 @@ export type SessionLogOutput =
             readonly agent?: Agent.ID | undefined
             readonly model?: Model.Ref | undefined
             readonly metadata?: Session.Metadata | undefined
+            readonly goal?: Session.Goal | undefined
             readonly permissions?: Permission.Ruleset | undefined
             readonly version: string
           }
@@ -727,6 +770,90 @@ export type SessionLogOutput =
             readonly sessionID: Session.ID
             readonly reason: "user" | "shutdown" | "superseded" | "inactivity"
           }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.goal.set"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly text: string
+            readonly autoContinue: boolean
+            readonly maxContinuations: number
+          }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.goal.updated"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly text?: string | undefined
+            readonly autoContinue?: boolean | undefined
+            readonly maxContinuations?: number | undefined
+          }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.goal.status.changed"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: {
+            readonly sessionID: Session.ID
+            readonly status: "active" | "paused" | "completed" | "blocked"
+            readonly reason?: string | undefined
+          }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.goal.cleared"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: { readonly sessionID: Session.ID }
+        }
+      | {
+          readonly id: Event.ID
+          readonly created: number
+          readonly metadata?: { readonly [x: string]: unknown } | undefined
+          readonly type: "session.goal.continued"
+          readonly durable: { readonly aggregateID: string; readonly seq: Event.Seq; readonly version: Event.Version }
+          readonly location?:
+            | {
+                readonly directory: AbsolutePath
+                readonly workspaceID?: (string & Brand.Brand<"Workspace.ID">) | undefined
+              }
+            | undefined
+          readonly data: { readonly sessionID: Session.ID }
         }
       | {
           readonly id: Event.ID
@@ -1414,6 +1541,12 @@ export interface SessionApi<E = never> {
   readonly export: SessionExportOperation<E>
   readonly active: SessionActiveOperation<E>
   readonly get: SessionGetOperation<E>
+  readonly getGoal: SessionGetGoalOperation<E>
+  readonly setGoal: SessionSetGoalOperation<E>
+  readonly updateGoal: SessionUpdateGoalOperation<E>
+  readonly pauseGoal: SessionPauseGoalOperation<E>
+  readonly resumeGoal: SessionResumeGoalOperation<E>
+  readonly clearGoal: SessionClearGoalOperation<E>
   readonly remove: SessionRemoveOperation<E>
   readonly fork: SessionForkOperation<E>
   readonly switchAgent: SessionSwitchAgentOperation<E>

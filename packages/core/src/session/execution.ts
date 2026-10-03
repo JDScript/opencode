@@ -14,6 +14,7 @@ import { SessionStore } from "./store.js"
 import { toSessionError } from "./to-session-error.js"
 import { UserInterruptedError } from "./error.js"
 import { SessionInbox } from "./inbox.js"
+import { SessionGoal } from "./goal.js"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -65,6 +66,7 @@ export const layer = Layer.effect(
     const bus = yield* Bus.Service
     const jobs = yield* Job.Service
     const db = (yield* Database.Service).db
+    const executionGoals = new Map<SessionSchema.ID, { id: string; revision: number }>()
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
@@ -113,10 +115,14 @@ export const layer = Layer.effect(
     })
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
       started: (sessionID) =>
-        reportLifecycle(
-          sessionID,
-          bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
-        ),
+        Effect.gen(function* () {
+          const goal = (yield* store.get(sessionID))?.goal
+          if (goal) executionGoals.set(sessionID, { id: goal.id, revision: goal.revision })
+          yield* reportLifecycle(
+            sessionID,
+            bus.publish(SessionEvent.Execution.Started, { sessionID }, claimOnCommit(sessionID)),
+          )
+        }),
       drain: (sessionID, force, promotable) => drain(sessionID, force, undefined, promotable),
       // One terminal observation per busy period, covering every coalesced drain.
       settled: (sessionID, exit, reason) =>
@@ -124,11 +130,14 @@ export const layer = Layer.effect(
           sessionID,
           Effect.gen(function* () {
             const outcome = terminal(exit, reason)
+            const goal = executionGoals.get(sessionID)
+            executionGoals.delete(sessionID)
             if (outcome.type === "succeeded") {
               yield* bus.publish(SessionEvent.Execution.Succeeded, { sessionID }, releaseOnCommit(sessionID))
               return
             }
             if (outcome.type === "interrupted") {
+              if (goal) yield* SessionGoal.stop(store, bus, sessionID, "paused", "Execution interrupted", goal)
               // Deliberate stops release the claim; shutdown keeps it for restart continuity.
               if (outcome.reason !== "shutdown") yield* jobs.cancel(sessionID)
               yield* bus.publish(
@@ -146,6 +155,15 @@ export const layer = Layer.effect(
               },
               releaseOnCommit(sessionID),
             )
+            if (goal)
+              yield* SessionGoal.stop(
+                store,
+                bus,
+                sessionID,
+                "blocked",
+                outcome.error.message ?? "Execution failed",
+                goal,
+              )
           }),
         ),
     })
@@ -155,6 +173,7 @@ export const layer = Layer.effect(
       isActive: coordinator.isActive,
       interrupt: (sessionID, options) =>
         Effect.gen(function* () {
+          yield* SessionGoal.stop(store, bus, sessionID, "paused", "Execution interrupted")
           const interrupted = yield* coordinator.interrupt(sessionID, options?.reason ?? "user", options)
           if (!options?.resume) return interrupted
           // Resume steering input and between-turn control work from the interrupted

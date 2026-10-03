@@ -55,8 +55,39 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         ),
         Effect.as(HttpApiSchema.NoContent.make()),
       )
+    const goalMutation = (effect: ReturnType<typeof session.updateGoal>) =>
+      effect.pipe(
+        Effect.catchTag("Session.NotFoundError", missingSession),
+        Effect.catchTag(
+          "Session.GoalConflict",
+          (error) => new ConflictError({ resource: error.sessionID, message: "Session has no goal to update" }),
+        ),
+        Effect.map((goal) => ({ data: goal ?? null })),
+      )
 
     return handlers
+      .handle("session.getGoal", (ctx) =>
+        session.getGoal(ctx.params.sessionID).pipe(
+          Effect.catchTag("Session.NotFoundError", missingSession),
+          Effect.map((goal) => ({ data: goal ?? null })),
+        ),
+      )
+      .handle("session.setGoal", (ctx) =>
+        session.setGoal({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+          Effect.catchTag("Session.NotFoundError", missingSession),
+          Effect.map((goal) => ({ data: goal ?? null })),
+        ),
+      )
+      .handle("session.updateGoal", (ctx) =>
+        goalMutation(session.updateGoal({ sessionID: ctx.params.sessionID, ...ctx.payload })),
+      )
+      .handle("session.pauseGoal", (ctx) => goalMutation(session.pauseGoal(ctx.params.sessionID)))
+      .handle("session.resumeGoal", (ctx) => goalMutation(session.resumeGoal(ctx.params.sessionID)))
+      .handle("session.clearGoal", (ctx) =>
+        session
+          .clearGoal(ctx.params.sessionID)
+          .pipe(Effect.catchTag("Session.NotFoundError", missingSession), Effect.as(HttpApiSchema.NoContent.make())),
+      )
       .handle(
         "session.list",
         Effect.fn(function* (ctx) {

@@ -51,6 +51,11 @@ export type MessagesInput = {
 }
 
 export interface Interface {
+  readonly executionGoal: (sessionID: Session.ID) => Effect.Effect<{ id: string; revision: number } | null>
+  readonly setExecutionGoal: (
+    sessionID: Session.ID,
+    goal: { id: string; revision: number } | null,
+  ) => Effect.Effect<void>
   readonly get: (sessionID: Session.ID) => Effect.Effect<Session.Info | undefined>
   readonly list: (input?: ListInput) => Effect.Effect<Session.Info[]>
   readonly messages: (input: MessagesInput) => Effect.Effect<SessionMessage.Info[], MessageDecodeError>
@@ -92,6 +97,23 @@ const layer = Layer.effect(
     const { db } = yield* Database.Service
 
     return Service.of({
+      executionGoal: Effect.fn("SessionStore.executionGoal")(function* (sessionID) {
+        const row = yield* db
+          .select({ goal: SessionTable.execution_goal })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return row?.goal ?? null
+      }),
+      setExecutionGoal: Effect.fn("SessionStore.setExecutionGoal")((sessionID, goal) =>
+        db
+          .update(SessionTable)
+          .set({ execution_goal: goal, time_updated: sql`${SessionTable.time_updated}` })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid),
+      ),
       get: Effect.fnUntraced(function* (sessionID) {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
@@ -217,7 +239,12 @@ const layer = Layer.effect(
       release: Effect.fn("SessionStore.release")(function* (sessionID) {
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: null, resume_attempts: 0, time_updated: sql`${SessionTable.time_updated}` })
+          .set({
+            time_suspended: null,
+            execution_goal: null,
+            resume_attempts: 0,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
           .where(eq(SessionTable.id, sessionID))
           .run()
           .pipe(Effect.orDie)

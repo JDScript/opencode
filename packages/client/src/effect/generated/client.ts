@@ -33,6 +33,18 @@ import type {
   SessionActiveOutput,
   SessionGetInput,
   SessionGetOutput,
+  SessionGetGoalInput,
+  SessionGetGoalOutput,
+  SessionSetGoalInput,
+  SessionSetGoalOutput,
+  SessionUpdateGoalInput,
+  SessionUpdateGoalOutput,
+  SessionPauseGoalInput,
+  SessionPauseGoalOutput,
+  SessionResumeGoalInput,
+  SessionResumeGoalOutput,
+  SessionClearGoalInput,
+  SessionClearGoalOutput,
   SessionRemoveInput,
   SessionRemoveOutput,
   SessionForkInput,
@@ -431,6 +443,65 @@ const EndpointSessionGet = (raw: RawClient["server.session"]) => (input: Session
     ),
   )
 
+const EndpointSessionGetGoal = (raw: RawClient["server.session"]) => (input: SessionGetGoalInput) =>
+  preserveEffect<SessionGetGoalOutput>()(
+    raw["session.getGoal"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionSetGoal = (raw: RawClient["server.session"]) => (input: SessionSetGoalInput) =>
+  preserveEffect<SessionSetGoalOutput>()(
+    raw["session.setGoal"]({
+      params: { sessionID: input["sessionID"] },
+      payload: {
+        text: input["text"],
+        autoContinue: input["autoContinue"],
+        maxContinuations: input["maxContinuations"],
+      },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionUpdateGoal = (raw: RawClient["server.session"]) => (input: SessionUpdateGoalInput) =>
+  preserveEffect<SessionUpdateGoalOutput>()(
+    raw["session.updateGoal"]({
+      params: { sessionID: input["sessionID"] },
+      payload: {
+        text: input["text"],
+        autoContinue: input["autoContinue"],
+        maxContinuations: input["maxContinuations"],
+      },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionPauseGoal = (raw: RawClient["server.session"]) => (input: SessionPauseGoalInput) =>
+  preserveEffect<SessionPauseGoalOutput>()(
+    raw["session.pauseGoal"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionResumeGoal = (raw: RawClient["server.session"]) => (input: SessionResumeGoalInput) =>
+  preserveEffect<SessionResumeGoalOutput>()(
+    raw["session.resumeGoal"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionClearGoal = (raw: RawClient["server.session"]) => (input: SessionClearGoalInput) =>
+  preserveEffect<SessionClearGoalOutput>()(
+    raw["session.clearGoal"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
 const EndpointSessionRemove = (raw: RawClient["server.session"]) => (input: SessionRemoveInput) =>
   preserveEffect<SessionRemoveOutput>()(
     raw["session.remove"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
@@ -754,6 +825,12 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   export: EndpointSessionExport(raw),
   active: EndpointSessionActive(raw),
   get: EndpointSessionGet(raw),
+  getGoal: EndpointSessionGetGoal(raw),
+  setGoal: EndpointSessionSetGoal(raw),
+  updateGoal: EndpointSessionUpdateGoal(raw),
+  pauseGoal: EndpointSessionPauseGoal(raw),
+  resumeGoal: EndpointSessionResumeGoal(raw),
+  clearGoal: EndpointSessionClearGoal(raw),
   remove: EndpointSessionRemove(raw),
   fork: EndpointSessionFork(raw),
   switchAgent: EndpointSessionSwitchAgent(raw),

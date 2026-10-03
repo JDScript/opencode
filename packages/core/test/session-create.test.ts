@@ -789,9 +789,10 @@ describe("Session.create", () => {
       const session = yield* Session.Service
       const parent = yield* session.create({ location })
 
-      expect(
-        yield* session.fork({ sessionID: parent.id }).pipe(Effect.flip),
-      ).toMatchObject({ _tag: "Session.ForkEmptyError", sessionID: parent.id })
+      expect(yield* session.fork({ sessionID: parent.id }).pipe(Effect.flip)).toMatchObject({
+        _tag: "Session.ForkEmptyError",
+        sessionID: parent.id,
+      })
     }),
   )
 
@@ -1218,6 +1219,30 @@ describe("Session.create", () => {
 })
 
 describe("SessionTransfer", () => {
+  it.effect("imports goal context paused without enabling automation or resetting usage", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const bus = yield* Bus.Service
+      const source = yield* session.create({ location })
+      yield* session.setGoal({ sessionID: source.id, text: "Portable objective", autoContinue: true })
+      yield* bus.publish(SessionEvent.Goal.Continued, { sessionID: source.id })
+      const exported = yield* transfer.export({ sessionID: source.id })
+      const imported = yield* transfer.import({
+        data: { ...exported, info: { ...exported.info, id: Session.ID.create() } },
+        location,
+      })
+      expect(imported.goal).toMatchObject({
+        text: "Portable objective",
+        status: "paused",
+        autoContinue: false,
+        continuationsUsed: 1,
+      })
+      expect((yield* session.get(source.id)).goal?.status).toBe("active")
+      const sanitized = yield* transfer.export({ sessionID: source.id, sanitize: true })
+      expect(sanitized.info.goal?.text).not.toContain("Portable objective")
+    }),
+  )
   it.effect("exports only settled projected messages", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

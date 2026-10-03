@@ -17,7 +17,7 @@ export type RunError =
   | UserInterruptedError
   | Instructions.InitializationBlocked
 
-export type Continuation = { readonly step: number }
+export type Continuation = { readonly step: number; readonly goal?: { readonly id: string; readonly revision: number } }
 
 export type DrainResult = Data.TaggedEnum<{
   Complete: {}

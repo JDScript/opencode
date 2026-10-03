@@ -58,6 +58,7 @@ import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { SessionGoalStatus, useGoalControls } from "../../component/dialog-session-goal"
 import { DialogImagePreview } from "../../component/dialog-image-preview"
 import { DialogMessage } from "./dialog-message"
 import { DialogFork } from "./dialog-fork"
@@ -807,7 +808,15 @@ export function Session(props: {
     },
   ]
 
+  const goalControls = useGoalControls(() => route.sessionID)
   const baseCommands = createMemo(() => [
+    {
+      title: "Manage session goal",
+      id: "session.goal",
+      group: "Session",
+      slash: { name: "goal", arguments: true as const },
+      run: goalControls.run,
+    },
     {
       title: "Share session",
       id: "session.share",
@@ -1278,6 +1287,7 @@ export function Session(props: {
           paddingRight={dimensions().width < 44 ? 1 : 2}
         >
           <Show when={session()}>
+            <SessionGoalStatus sessionID={route.sessionID} />
             <box flexGrow={1} minHeight={0} position="relative">
               <scrollbox
                 ref={(r) => {

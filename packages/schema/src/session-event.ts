@@ -26,6 +26,7 @@ import { SessionInbox } from "./session-inbox.js"
 import { Project } from "./project.js"
 import { SessionFork } from "./session-fork.js"
 import { Permission } from "./permission.js"
+import { SessionGoal } from "./session-goal.js"
 
 export { FileAttachment }
 
@@ -63,6 +64,8 @@ export const Created = Event.durable({
     model: Model.Ref.pipe(optional),
     /** Host-supplied annotations resolved at creation, including any inherited from a parent. */
     metadata: SessionMetadata.pipe(optional),
+    /** Imported snapshot only; normal creation and subagents start without a goal. */
+    goal: SessionGoal.Info.pipe(optional),
     permissions: Permission.Ruleset.pipe(optional),
     version: Schema.String,
   },
@@ -249,6 +252,26 @@ export namespace Execution {
     schema: { ...Base, reason: Schema.Literals(["user", "shutdown", "superseded", "inactivity"]) },
   })
   export type Interrupted = typeof Interrupted.Type
+}
+
+export namespace Goal {
+  export const Set = Event.durable({
+    type: "session.goal.set",
+    ...options,
+    schema: { ...Base, text: SessionGoal.Text, autoContinue: Schema.Boolean, maxContinuations: SessionGoal.Limit },
+  })
+  export const Updated = Event.durable({
+    type: "session.goal.updated",
+    ...options,
+    schema: { ...Base, ...SessionGoal.Update.fields },
+  })
+  export const StatusChanged = Event.durable({
+    type: "session.goal.status.changed",
+    ...options,
+    schema: { ...Base, status: SessionGoal.Status, reason: Schema.String.pipe(optional) },
+  })
+  export const Cleared = Event.durable({ type: "session.goal.cleared", ...options, schema: Base })
+  export const Continued = Event.durable({ type: "session.goal.continued", ...options, schema: Base })
 }
 
 export const InstructionsUpdated = Event.durable({
@@ -661,6 +684,11 @@ export const Definitions = Event.inventory(
   Execution.Succeeded,
   Execution.Failed,
   Execution.Interrupted,
+  Goal.Set,
+  Goal.Updated,
+  Goal.StatusChanged,
+  Goal.Cleared,
+  Goal.Continued,
   InstructionsUpdated,
   Synthetic,
   Skill.Activated,

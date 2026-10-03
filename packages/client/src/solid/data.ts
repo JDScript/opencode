@@ -697,6 +697,14 @@ export function createData(config: CreateDataInput) {
         })
         return
       }
+      case "session.goal.set":
+      case "session.goal.updated":
+      case "session.goal.status.changed":
+      case "session.goal.cleared":
+      case "session.goal.continued":
+        result.session.invalidate(event.data.sessionID)
+        refresh(() => result.session.sync(event.data.sessionID))
+        return
       case "session.permissions":
         if (store.session.info[event.data.sessionID])
           setStore("session", "info", event.data.sessionID, "permissions", event.data.permissions)
@@ -1048,7 +1056,8 @@ export function createData(config: CreateDataInput) {
             (item) =>
               item.type === "assistant" &&
               item.content.some(
-                (part) => part.type === "tool" && (part.state.status === "streaming" || part.state.status === "running"),
+                (part) =>
+                  part.type === "tool" && (part.state.status === "streaming" || part.state.status === "running"),
               ),
           )
         ) {

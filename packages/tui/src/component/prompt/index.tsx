@@ -69,6 +69,8 @@ import { directoryRecentValue } from "../../prompt/directory-completion"
 import { useWorkingDirectoryActions } from "../../ui/working-directory-actions"
 import { truncateFilePath } from "../../ui/file-path"
 import { PromptMetadataRow } from "./metadata"
+import { DialogSessionGoal, useGoalControls } from "../dialog-session-goal"
+import { parseGoalCommand } from "../../util/goal"
 
 export type PromptProps = {
   sessionID?: string
@@ -186,9 +188,10 @@ export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
+  const [creatingGoal, setCreatingGoal] = createSignal(false)
 
   const enabled = useInteractivity()
-  const disabled = () => props.disabled || !enabled()
+  const disabled = () => props.disabled || !enabled() || creatingGoal()
   const leader = Keymap.useLeaderActive()
   const muted = () => leader() || props.muted
   const local = useLocal()
@@ -258,10 +261,66 @@ export function Prompt(props: PromptProps) {
     sessionID: () => props.sessionID,
   })
   const [pendingDirectory, setPendingDirectory] = createSignal<string>()
+  const [goalSession, setGoalSession] = createSignal("")
+  const goalControls = useGoalControls(goalSession)
   Keymap.createLayer(() => ({
     mode: "global",
     enabled: !disabled(),
     commands: [
+      ...(!props.sessionID
+        ? [
+            {
+              id: "session.goal",
+              title: "Set session goal",
+              group: "Session",
+              palette: true as const,
+              slash: { name: "goal", arguments: true as const },
+              run: (input?: string) => {
+                if (creatingGoal() || move.creating()) return
+                setCreatingGoal(true)
+                return Promise.resolve()
+                  .then(async () => {
+                    const command = parseGoalCommand(input)
+                    if (command.action !== "inspect" && command.action !== "set") {
+                      throw new Error("Create a goal first with /goal set <objective>")
+                    }
+                    toast.show({ message: "Creating an empty session for the goal…", variant: "info" })
+                    const directory = await move.getDirectory()
+                    if (move.pending() && !directory) return
+                    const selection = local.model.selection()
+                    const created = data.session.create({
+                      location: directory ? { directory } : (currentLocation.ref ?? data.location.default()),
+                      agent: local.agent.current()?.id,
+                      model: selection
+                        ? {
+                            providerID: selection.providerID,
+                            id: selection.modelID,
+                            variant: selection.variant,
+                          }
+                        : undefined,
+                    })
+                    await created.request
+                    move.finishSubmit()
+                    setGoalSession(created.id)
+                    if (terminalEnvironment.variables !== undefined) {
+                      await client.api.session.environment({
+                        sessionID: created.id,
+                        variables: terminalEnvironment.variables,
+                      })
+                    }
+                    if (command.action === "set") await goalControls.apply(command)
+                    route.navigate({ type: "session", sessionID: created.id })
+                    if (command.action === "inspect") return DialogSessionGoal.show(dialog, created.id)
+                  })
+                  .catch(toast.error)
+                  .finally(() => {
+                    if (move.creating()) move.finishSubmit()
+                    setCreatingGoal(false)
+                  })
+              },
+            },
+          ]
+        : []),
       {
         id: "session.cd",
         title: "Change working directory",

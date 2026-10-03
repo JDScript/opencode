@@ -23,12 +23,7 @@ import { fromRow } from "@opencode/core/session/info"
 import { SessionInbox } from "@opencode/core/session/inbox"
 import { SessionStore } from "@opencode/core/session/store"
 import { Shell } from "@opencode/schema/shell"
-import {
-  InstructionStateTable,
-  SessionInboxTable,
-  SessionMessageTable,
-  SessionTable,
-} from "@opencode/core/session/sql"
+import { InstructionStateTable, SessionInboxTable, SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
 import { testEffect } from "./lib/effect"
 import { Snapshot } from "@opencode/core/snapshot"
 
@@ -85,6 +80,70 @@ const seedSession = (overrides?: Partial<typeof SessionTable.$inferInsert>) =>
   })
 
 describe("SessionProjector", () => {
+  it.effect("replays goal facts outside history, preserves usage, and clears the goal", () =>
+    Effect.gen(function* () {
+      yield* seedSession()
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const id = Event.ID.create()
+      const events: Bus.SerializedEvent[] = [
+        {
+          id,
+          type: "session.goal.set.1",
+          aggregateID: sessionID,
+          seq: 0,
+          data: { sessionID, text: "Durable objective", autoContinue: true, maxContinuations: 10 },
+        },
+        {
+          id: Event.ID.create(),
+          type: "session.goal.continued.1",
+          aggregateID: sessionID,
+          seq: 1,
+          data: { sessionID },
+        },
+        {
+          id: Event.ID.create(),
+          type: "session.goal.updated.1",
+          aggregateID: sessionID,
+          seq: 2,
+          data: { sessionID, text: "Edited objective", maxContinuations: 12 },
+        },
+        {
+          id: Event.ID.create(),
+          type: "session.goal.status.changed.1",
+          aggregateID: sessionID,
+          seq: 3,
+          data: { sessionID, status: "paused" },
+        },
+        {
+          id: Event.ID.create(),
+          type: "session.goal.status.changed.1",
+          aggregateID: sessionID,
+          seq: 4,
+          data: { sessionID, status: "active" },
+        },
+      ]
+      for (const event of events) yield* bus.replay(event)
+      expect((yield* store.get(sessionID))?.goal).toEqual({
+        id,
+        revision: 4,
+        text: "Edited objective",
+        status: "active",
+        autoContinue: true,
+        maxContinuations: 12,
+        continuationsUsed: 1,
+      })
+      expect(yield* store.messages({ sessionID })).toEqual([])
+      yield* bus.replay({
+        id: Event.ID.create(),
+        type: "session.goal.cleared.1",
+        aggregateID: sessionID,
+        seq: 5,
+        data: { sessionID },
+      })
+      expect((yield* store.get(sessionID))?.goal).toBeUndefined()
+    }),
+  )
   it.effect("does not settle a pending manual compaction on an auto failure", () =>
     Effect.gen(function* () {
       const db = yield* seedSession()

@@ -54,6 +54,12 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
       sessionID: input.session.id,
       revert,
     })
+    if (input.session.goal?.status === "active")
+      yield* bus.publish(SessionEvent.Goal.StatusChanged, {
+        sessionID: input.session.id,
+        status: "paused",
+        reason: "Session reverted",
+      })
     return revert
   }).pipe(instances.provide(input.session))
 })
@@ -77,6 +83,12 @@ export const clear = Effect.fn("SessionRevert.clear")(function* (session: Sessio
 
 export const commit = Effect.fn("SessionRevert.commit")(function* (bus: Bus.Interface, session: SessionSchema.Info) {
   if (!session.revert) return
+  if (session.goal?.status === "active")
+    yield* bus.publish(SessionEvent.Goal.StatusChanged, {
+      sessionID: session.id,
+      status: "paused",
+      reason: "Session reverted",
+    })
   yield* bus.publish(SessionEvent.RevertEvent.Committed, {
     sessionID: session.id,
     to: session.revert.messageID,

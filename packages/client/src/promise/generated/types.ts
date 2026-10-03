@@ -49,6 +49,17 @@ export type TokenUsageInfo = {
 
 export type SessionMetadata = { [x: string]: JsonValue }
 
+export type SessionGoal = {
+  id: string
+  revision: number
+  text: string
+  status: "active" | "paused" | "completed" | "blocked"
+  autoContinue: boolean
+  maxContinuations: number
+  continuationsUsed: number
+  reason?: string
+}
+
 export type FileDiffInfo = {
   file: string
   patch: string
@@ -695,6 +706,56 @@ export type SessionExecutionInterrupted = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; reason: "user" | "shutdown" | "superseded" | "inactivity" }
+}
+
+export type SessionGoalSet = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.goal.set"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; text: string; autoContinue: boolean; maxContinuations: number }
+}
+
+export type SessionGoalUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.goal.updated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; text?: string; autoContinue?: boolean; maxContinuations?: number }
+}
+
+export type SessionGoalStatusChanged = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.goal.status.changed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; status: "active" | "paused" | "completed" | "blocked"; reason?: string }
+}
+
+export type SessionGoalCleared = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.goal.cleared"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string }
+}
+
+export type SessionGoalContinued = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.goal.continued"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string }
 }
 
 export type SessionInstructionsUpdated = {
@@ -1984,6 +2045,7 @@ export type SessionInfo = {
   title?: string
   subpath?: string
   metadata?: SessionMetadata
+  goal?: SessionGoal
   permissions?: PermissionRuleset
   revert?: SessionRevert
   location: LocationPublicRef
@@ -2007,6 +2069,7 @@ export type SessionCreated = {
     agent?: string
     model?: ModelRef
     metadata?: SessionMetadata
+    goal?: SessionGoal
     permissions?: PermissionRuleset
     version: string
   }
@@ -2352,6 +2415,11 @@ export type SessionEventDurable =
   | SessionExecutionSucceeded
   | SessionExecutionFailed
   | SessionExecutionInterrupted
+  | SessionGoalSet
+  | SessionGoalUpdated
+  | SessionGoalStatusChanged
+  | SessionGoalCleared
+  | SessionGoalContinued
   | SessionInstructionsUpdated
   | SessionSynthetic
   | SessionSkillActivated
@@ -2415,6 +2483,11 @@ export type V2Event =
   | SessionExecutionSucceeded
   | SessionExecutionFailed
   | SessionExecutionInterrupted
+  | SessionGoalSet
+  | SessionGoalUpdated
+  | SessionGoalStatusChanged
+  | SessionGoalCleared
+  | SessionGoalContinued
   | SessionInstructionsUpdated
   | SessionSynthetic
   | SessionSkillActivated
@@ -3012,6 +3085,16 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
+      readonly goal?: {
+        readonly id: string
+        readonly revision: number
+        readonly text: string
+        readonly status: "active" | "paused" | "completed" | "blocked"
+        readonly autoContinue: boolean
+        readonly maxContinuations: number
+        readonly continuationsUsed: number
+        readonly reason?: string
+      }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
@@ -3329,6 +3412,16 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
+      readonly goal?: {
+        readonly id: string
+        readonly revision: number
+        readonly text: string
+        readonly status: "active" | "paused" | "completed" | "blocked"
+        readonly autoContinue: boolean
+        readonly maxContinuations: number
+        readonly continuationsUsed: number
+        readonly reason?: string
+      }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
@@ -3646,6 +3739,16 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
+      readonly goal?: {
+        readonly id: string
+        readonly revision: number
+        readonly text: string
+        readonly status: "active" | "paused" | "completed" | "blocked"
+        readonly autoContinue: boolean
+        readonly maxContinuations: number
+        readonly continuationsUsed: number
+        readonly reason?: string
+      }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
@@ -3948,6 +4051,60 @@ export type SessionActiveOutput = { data: { [x: string]: SessionActive } }["data
 export type SessionGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionGetOutput = { data: SessionInfo }["data"]
+
+export type SessionGetGoalInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionGetGoalOutput = { data: SessionGoal | null }["data"]
+
+export type SessionSetGoalInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly text: { readonly text: string; readonly autoContinue?: boolean; readonly maxContinuations?: number }["text"]
+  readonly autoContinue?: {
+    readonly text: string
+    readonly autoContinue?: boolean
+    readonly maxContinuations?: number
+  }["autoContinue"]
+  readonly maxContinuations?: {
+    readonly text: string
+    readonly autoContinue?: boolean
+    readonly maxContinuations?: number
+  }["maxContinuations"]
+}
+
+export type SessionSetGoalOutput = { data: SessionGoal | null }["data"]
+
+export type SessionUpdateGoalInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly text?: {
+    readonly text?: string
+    readonly autoContinue?: boolean
+    readonly maxContinuations?: number
+  }["text"]
+  readonly autoContinue?: {
+    readonly text?: string
+    readonly autoContinue?: boolean
+    readonly maxContinuations?: number
+  }["autoContinue"]
+  readonly maxContinuations?: {
+    readonly text?: string
+    readonly autoContinue?: boolean
+    readonly maxContinuations?: number
+  }["maxContinuations"]
+}
+
+export type SessionUpdateGoalOutput = { data: SessionGoal | null }["data"]
+
+export type SessionPauseGoalInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionPauseGoalOutput = { data: SessionGoal | null }["data"]
+
+export type SessionResumeGoalInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionResumeGoalOutput = { data: SessionGoal | null }["data"]
+
+export type SessionClearGoalInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionClearGoalOutput = void
 
 export type SessionRemoveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

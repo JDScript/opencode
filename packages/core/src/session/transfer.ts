@@ -103,6 +103,13 @@ const layer = Layer.effect(
               agent: input.data.info.agent,
               model: input.data.info.model,
               metadata: input.data.info.metadata,
+              goal: input.data.info.goal
+                ? {
+                    ...input.data.info.goal,
+                    autoContinue: false,
+                    status: input.data.info.goal.status === "active" ? "paused" : input.data.info.goal.status,
+                  }
+                : undefined,
               permissions: input.data.info.permissions,
             },
             {
@@ -181,6 +188,9 @@ function sanitize(data: Data): Data {
   return {
     info: {
       ...data.info,
+      goal: data.info.goal
+        ? { ...data.info.goal, text: redact("session-goal", data.info.id, data.info.goal.text), reason: undefined }
+        : undefined,
       title: data.info.title === undefined ? undefined : redact("session-title", data.info.id, data.info.title),
       metadata:
         data.info.metadata && Object.keys(data.info.metadata).length > 0

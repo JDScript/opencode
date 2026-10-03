@@ -127,7 +127,15 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = Session.ID.make("ses_claim_user_cancel")
+      const store = yield* SessionStore.Service
       yield* seedSessions(database, [sessionID])
+      const bus = yield* Bus.Service
+      yield* bus.publish(SessionEvent.Goal.Set, {
+        sessionID,
+        text: "Interruptible objective",
+        autoContinue: true,
+        maxContinuations: 10,
+      })
 
       const draining = yield* Deferred.make<void>()
       const scope = yield* Scope.make()
@@ -139,10 +147,13 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID).pipe(Effect.forkScoped)
       yield* Deferred.await(draining)
       expect((yield* claims(database))[sessionID]).toBe(true)
+      yield* store.setExecutionGoal(sessionID, { id: "automatic-origin", revision: 0 })
 
       expect(yield* execution.interrupt(sessionID)).toBeTrue()
       yield* execution.awaitIdle(sessionID)
       expect((yield* claims(database))[sessionID]).toBe(false)
+      expect(yield* store.executionGoal(sessionID)).toBeNull()
+      expect((yield* store.get(sessionID))?.goal?.status).toBe("paused")
     }),
   )
 
@@ -157,6 +168,35 @@ describe("SessionExecution lifecycle", () => {
       expect(yield* execution.interrupt(sessionID)).toBeFalse()
       expect(yield* execution.active).not.toContain(sessionID)
       expect(yield* execution.isActive(sessionID)).toBe(false)
+    }),
+  )
+
+  it.effect("blocks the matching goal when execution fails without restarting it", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const sessionID = Session.ID.make("ses_goal_failure")
+      yield* seedSessions(database, [sessionID])
+      yield* bus.publish(SessionEvent.Goal.Set, {
+        sessionID,
+        text: "Stop on terminal failure",
+        autoContinue: true,
+        maxContinuations: 10,
+      })
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () =>
+        Effect.fail(
+          new AIError({
+            reason: new TransportError({ message: "Disconnected", transport: "http", operation: "request" }),
+          }),
+        ),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+      expect((yield* execution.resume(sessionID).pipe(Effect.exit))._tag).toBe("Failure")
+      expect((yield* store.get(sessionID))?.goal).toMatchObject({ status: "blocked", continuationsUsed: 0 })
+      expect((yield* claims(database))[sessionID]).toBe(false)
     }),
   )
 
@@ -288,6 +328,77 @@ describe("SessionExecution lifecycle", () => {
       expect(drained.length).toBe(2)
       expect(continued.length).toBe(2)
       yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("does not restart opted-in goal automation from an orphaned execution claim", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const sessionID = Session.ID.make("ses_goal_restart")
+      const cleared = Session.ID.make("ses_goal_cleared_restart")
+      yield* seedSessions(database, [sessionID, cleared], { time_suspended: Date.now() })
+      yield* bus.publish(SessionEvent.Goal.Set, {
+        sessionID,
+        text: "No unattended restart",
+        autoContinue: true,
+        maxContinuations: 10,
+      })
+      yield* bus.publish(SessionEvent.Goal.Set, {
+        sessionID: cleared,
+        text: "Cleared before settlement",
+        autoContinue: true,
+        maxContinuations: 10,
+      })
+      yield* bus.publish(SessionEvent.Goal.Cleared, { sessionID: cleared })
+      for (const id of [sessionID, cleared]) {
+        yield* store.setExecutionGoal(id, { id: "automatic-origin", revision: 0 })
+      }
+      const drained: string[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, ({ sessionID: id }) => Effect.sync(() => void drained.push(id)))
+      yield* Context.get(context, SessionRestart.Service).resumeSuspendedSessions
+      expect(drained).toEqual([])
+      expect((yield* store.get(sessionID))?.goal?.status).toBe("paused")
+      expect((yield* claims(database))[sessionID]).toBe(false)
+      expect((yield* claims(database))[cleared]).toBe(false)
+    }),
+  )
+
+  it.effect("recovers ordinary claims with passive or cleared goals and pauses opted-in goals", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const ids = ["passive", "cleared", "opted-in"].map((suffix) => Session.ID.make(`ses_ordinary_${suffix}`))
+      yield* seedSessions(database, ids, { time_suspended: Date.now() })
+      for (const id of ids)
+        yield* bus.publish(SessionEvent.Goal.Set, {
+          sessionID: id,
+          text: "Ordinary recovery",
+          autoContinue: id === ids[2],
+          maxContinuations: 10,
+        })
+      yield* bus.publish(SessionEvent.Goal.Cleared, { sessionID: ids[1] })
+      const drained: string[] = []
+      const done = yield* Deferred.make<void>()
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, ({ sessionID }) =>
+        Effect.gen(function* () {
+          drained.push(sessionID)
+          if (drained.length === 3) yield* Deferred.succeed(done, undefined)
+        }),
+      )
+      yield* Context.get(context, SessionRestart.Service).resumeSuspendedSessions
+      yield* Deferred.await(done)
+      yield* Effect.forEach(ids, Context.get(context, SessionExecution.Service).awaitIdle)
+      expect(drained.toSorted()).toEqual(ids.toSorted())
+      expect((yield* store.get(ids[0]))?.goal?.status).toBe("active")
+      expect((yield* store.get(ids[1]))?.goal).toBeUndefined()
+      expect((yield* store.get(ids[2]))?.goal?.status).toBe("paused")
     }),
   )
 

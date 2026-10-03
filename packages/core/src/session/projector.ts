@@ -451,6 +451,7 @@ const layer = Layer.effectDiscard(
             agent: event.data.agent,
             model: event.data.model,
             metadata: event.data.metadata,
+            goal: event.data.goal,
             permission: event.data.permissions,
             version: event.data.version,
             time_created: event.created,
@@ -569,6 +570,68 @@ const layer = Layer.effectDiscard(
       db
         .update(SessionTable)
         .set({ title: event.data.title, time_updated: event.created })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    yield* bus.project(SessionEvent.Goal.Set, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          goal: {
+            id: event.id,
+            revision: event.durable.seq,
+            text: event.data.text,
+            status: "active",
+            autoContinue: event.data.autoContinue,
+            maxContinuations: event.data.maxContinuations,
+            continuationsUsed: 0,
+          },
+          time_updated: event.created,
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    for (const definition of [
+      SessionEvent.Goal.Updated,
+      SessionEvent.Goal.StatusChanged,
+      SessionEvent.Goal.Continued,
+    ]) {
+      yield* bus.project(definition, (event) =>
+        Effect.gen(function* () {
+          const row = yield* db
+            .select({ goal: SessionTable.goal })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, event.data.sessionID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!row?.goal) return
+          const goal =
+            event.type === "session.goal.continued"
+              ? { ...row.goal, continuationsUsed: row.goal.continuationsUsed + 1 }
+              : event.type === "session.goal.status.changed"
+                ? { ...row.goal, status: event.data.status, reason: event.data.reason, revision: event.durable.seq }
+                : {
+                    ...row.goal,
+                    ...Object.fromEntries(
+                      Object.entries(event.data).filter(([key, value]) => key !== "sessionID" && value !== undefined),
+                    ),
+                    revision: event.durable.seq,
+                  }
+          yield* db
+            .update(SessionTable)
+            .set({ goal, time_updated: event.created })
+            .where(eq(SessionTable.id, event.data.sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }),
+      )
+    }
+    yield* bus.project(SessionEvent.Goal.Cleared, (event) =>
+      db
+        .update(SessionTable)
+        .set({ goal: null, time_updated: event.created })
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(Effect.orDie),

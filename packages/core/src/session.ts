@@ -64,6 +64,7 @@ import { Job } from "./job.js"
 import type { Command } from "./command.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
+import { SessionGoal } from "./session/goal.js"
 
 // get project -> project.locations
 //
@@ -115,6 +116,20 @@ export { DestinationNotFoundError, DestinationNotDirectoryError, DestinationUnav
 export { TurnRangeError }
 
 export interface Interface {
+  readonly getGoal: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Goal | undefined, NotFoundError>
+  readonly setGoal: (
+    input: SessionGoal.Set & { sessionID: SessionSchema.ID },
+  ) => Effect.Effect<SessionSchema.Goal | undefined, NotFoundError>
+  readonly updateGoal: (
+    input: SessionGoal.Update & { sessionID: SessionSchema.ID },
+  ) => Effect.Effect<SessionSchema.Goal | undefined, NotFoundError | SessionGoal.Conflict>
+  readonly pauseGoal: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionSchema.Goal | undefined, NotFoundError | SessionGoal.Conflict>
+  readonly resumeGoal: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionSchema.Goal | undefined, NotFoundError | SessionGoal.Conflict>
+  readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<{
     readonly data: SessionSchema.Info[]
   }>
@@ -238,6 +253,7 @@ const layer = Layer.effect(
     const moves = yield* SessionMove.Service
     const jobs = yield* Job.Service
     const environments = yield* SessionEnvironment.Service
+    const goals = yield* SessionGoal.make()
     const locations = yield* LocationServiceMap.Service
     const sessions = yield* Session.make()
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
@@ -341,6 +357,22 @@ const layer = Layer.effect(
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
+      getGoal: goals.get,
+      setGoal: (input) =>
+        goals.set(input.sessionID, {
+          text: input.text,
+          autoContinue: input.autoContinue,
+          maxContinuations: input.maxContinuations,
+        }),
+      updateGoal: (input) =>
+        goals.update(input.sessionID, {
+          text: input.text,
+          autoContinue: input.autoContinue,
+          maxContinuations: input.maxContinuations,
+        }),
+      pauseGoal: goals.pause,
+      resumeGoal: goals.resume,
+      clearGoal: goals.clear,
       get: (sessionID) => sessions.forSession(sessionID).get(),
       environment: Effect.fn("Session.environment")(function* (input) {
         yield* result.get(input.sessionID)

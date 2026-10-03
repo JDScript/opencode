@@ -1,6 +1,7 @@
 export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@opencode/ai"
+import { Event } from "@opencode/schema/event"
 import { and, desc, eq, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
@@ -18,6 +19,7 @@ import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
+import { SessionGoal } from "../goal.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
 import { DrainResult, Service, type Interface } from "./index.js"
@@ -33,6 +35,8 @@ import { MAX_STEPS_PROMPT } from "./max-steps.js"
 
 const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
+const GOAL_CONTINUATION =
+  "Continue the active session objective within the latest user scope and existing permissions. If finished, report completed; if user input is needed, report blocked and stop."
 
 const layer = Layer.effect(
   Service,
@@ -56,6 +60,10 @@ const layer = Layer.effect(
       let continuing = input.continuation !== undefined
       let step = input.continuation?.step ?? 1
       let entering = true
+      let normalCompleted = false
+      let emptyCompleted = false
+      let automaticGoal = input.continuation?.goal
+      let admitGoal = false
       const promotable = input.promotable ?? "input"
       if (!force && !continuing) {
         const pending = yield* SessionInbox.nextPromotable(db, sessionID, "input")
@@ -73,7 +81,10 @@ const layer = Layer.effect(
             while (true) {
               if (lifecycle.isClosed()) {
                 yield* restore(modelTransport.close(sessionID))
-                return DrainResult.Reloaded({ force, continuation: continuing ? { step } : undefined })
+                return DrainResult.Reloaded({
+                  force,
+                  continuation: continuing ? { step, goal: automaticGoal } : undefined,
+                })
               }
               // Location entry and idle boundaries allow queued controls, not necessarily queued prompts.
               const pending = yield* SessionInbox.serialized(
@@ -107,7 +118,7 @@ const layer = Layer.effect(
                 step = 1
               }
               if (pending?.type === "move")
-                return DrainResult.Moved({ continuation: continuing ? { step } : undefined })
+                return DrainResult.Moved({ continuation: continuing ? { step, goal: automaticGoal } : undefined })
               if (pending?.type === "compaction") {
                 const session = yield* store.get(sessionID)
                 if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
@@ -157,8 +168,35 @@ const layer = Layer.effect(
                 force = false
                 continue
               }
-              if (!force && !continuing && (!pending || (pending.delivery === "queue" && promotable === "steer")))
-                return DrainResult.Complete()
+              if (!force && !continuing && (!pending || (pending.delivery === "queue" && promotable === "steer"))) {
+                if (pending || !normalCompleted || promotable === "steer") return DrainResult.Complete()
+                const continued = yield* SessionInbox.serialized(
+                  sessionID,
+                  Effect.gen(function* () {
+                    if (yield* SessionInbox.nextPromotable(db, sessionID, "input")) return "input" as const
+                    const session = yield* store.get(sessionID)
+                    const goal = session?.goal
+                    if (session?.parentID || !goal || goal.status !== "active" || !goal.autoContinue || session?.revert)
+                      return false
+                    if (automaticGoal && (goal.id !== automaticGoal.id || goal.revision !== automaticGoal.revision))
+                      return false
+                    if (emptyCompleted || goal.continuationsUsed >= goal.maxContinuations) {
+                      yield* bus.publish(SessionEvent.Goal.StatusChanged, {
+                        sessionID,
+                        status: emptyCompleted ? "blocked" : "paused",
+                        reason: emptyCompleted ? "The assistant returned no output" : "Continuation limit reached",
+                      })
+                      return false
+                    }
+                    automaticGoal = { id: goal.id, revision: goal.revision }
+                    admitGoal = true
+                    return true
+                  }),
+                )
+                if (continued === "input") continue
+                if (!continued) return DrainResult.Complete()
+                continuing = true
+              }
               const ready = yield* restore(
                 Effect.gen(function* () {
                   const selected = yield* prepareContext(sessionID)
@@ -174,10 +212,25 @@ const layer = Layer.effect(
                     yield* FiberMap.run(titles, sessionID, title.generate(sessionID), {
                       onlyIfMissing: true,
                     })
-                  if (promoted > 0) step = 1
+                  if (promoted > 0) {
+                    step = 1
+                    automaticGoal = undefined
+                    admitGoal = false
+                  }
+                  if (automaticGoal) {
+                    const goal = (yield* store.get(sessionID))?.goal
+                    if (
+                      !goal ||
+                      goal.status !== "active" ||
+                      goal.id !== automaticGoal.id ||
+                      goal.revision !== automaticGoal.revision
+                    )
+                      return { _tag: "Stopped" as const }
+                  }
                   return { _tag: "Ready" as const, context: yield* context.load(selected) }
                 }),
               )
+              if (ready?._tag === "Stopped") return DrainResult.Complete()
               if (ready) return ready
             }
           }),
@@ -185,9 +238,25 @@ const layer = Layer.effect(
       )
 
       while (true) {
-        const next = yield* advanceToStep()
+        const next = yield* advanceToStep().pipe(
+          Effect.tapCause((cause) =>
+            automaticGoal && !Cause.hasInterruptsOnly(cause)
+              ? SessionGoal.stop(store, bus, sessionID, "blocked", Cause.pretty(cause), automaticGoal)
+              : Effect.void,
+          ),
+        )
         if (next._tag !== "Ready") return next
-        continuing = yield* runStep(next.context, step)
+        const result = yield* runStep(next.context, step, automaticGoal, admitGoal).pipe(
+          Effect.tapCause((cause) =>
+            automaticGoal && !Cause.hasInterruptsOnly(cause)
+              ? SessionGoal.stop(store, bus, sessionID, "blocked", Cause.pretty(cause), automaticGoal)
+              : Effect.void,
+          ),
+        )
+        admitGoal = false
+        continuing = result.needsContinuation
+        normalCompleted = result.normal
+        emptyCompleted = result.empty
         step++
         force = false
         entering = false
@@ -202,14 +271,25 @@ const layer = Layer.effect(
     })
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(function* (
+      first: SessionContext.Loaded,
+      step: number,
+      goal?: { id: string; revision: number },
+      admitGoal = false,
+    ) {
       const sessionID = first.session.id
+      const continuationID = Event.ID.create()
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
       while (true) {
+        if (goal) {
+          const current = (yield* store.get(sessionID))?.goal
+          if (!current || current.status !== "active" || current.id !== goal.id || current.revision !== goal.revision)
+            return { needsContinuation: false, normal: false, empty: false }
+        }
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
         initial = undefined
@@ -240,11 +320,59 @@ const layer = Layer.effect(
           system: transcript.system,
           messages: stepLimitReached
             ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
-            : transcript.messages,
+            : admitGoal
+              ? [
+                  ...transcript.messages,
+                  Message.make({
+                    id: SessionMessage.ID.fromEvent(continuationID),
+                    role: "user",
+                    content: GOAL_CONTINUATION,
+                  }),
+                ]
+              : transcript.messages,
           // Keep tool definitions on the final Step to preserve the provider's cached prefix.
           toolChoice: stepLimitReached ? "none" : undefined,
           webSocket: "session",
         })
+        if (goal && !prepared.canReportGoal) {
+          yield* SessionGoal.stop(
+            store,
+            bus,
+            sessionID,
+            "blocked",
+            "Automatic continuation requires an available goal_report tool on a tool-capable model",
+            goal,
+          )
+          return { needsContinuation: false, normal: false, empty: false }
+        }
+        if (admitGoal && goal) {
+          const admitted = yield* SessionInbox.serialized(
+            sessionID,
+            Effect.gen(function* () {
+              if (yield* SessionInbox.nextPromotable(db, sessionID, "input")) return "input" as const
+              const current = (yield* store.get(sessionID))?.goal
+              if (
+                !current ||
+                current.status !== "active" ||
+                !current.autoContinue ||
+                current.id !== goal.id ||
+                current.revision !== goal.revision
+              )
+                return false
+              yield* bus.publishAll([
+                [SessionEvent.Goal.Continued, { sessionID }, { commit: () => store.setExecutionGoal(sessionID, goal) }],
+                [
+                  SessionEvent.Synthetic,
+                  { sessionID, text: GOAL_CONTINUATION, description: "Continuing session goal" },
+                  { id: continuationID },
+                ],
+              ])
+              return true
+            }),
+          )
+          if (admitted !== true) return { needsContinuation: admitted === "input", normal: false, empty: false }
+          admitGoal = false
+        }
         const outcome = yield* steps.attempt({
           isLocationClosed: lifecycle.isClosed,
           sessionID,
@@ -295,7 +423,17 @@ const layer = Layer.effect(
             recoverContinuation = false
           }),
         })
-        if (completed !== undefined) return completed
+        if (completed !== undefined) {
+          const message = (yield* store.message(assistantMessageID))?.message
+          const empty =
+            message?.type === "assistant" &&
+            !message.content.some((part) => (part.type === "text" ? part.text.trim().length > 0 : part.type === "tool"))
+          return {
+            needsContinuation: completed,
+            normal: !stepLimitReached && message?.type === "assistant" && message.finish === "stop",
+            empty,
+          }
+        }
       }
     })
 
