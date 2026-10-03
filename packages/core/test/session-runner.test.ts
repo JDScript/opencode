@@ -1293,6 +1293,47 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.session.getGoal(sessionID))?.continuationsUsed).toBe(0)
   })
 
+  for (const route of [OpenAIChat.route, OpenAIResponses.route]) {
+    scenario(`goal tools serialize object parameters and read without arguments (${route.id})`, function* (s) {
+      yield* goalTools
+      s.currentModel = LanguageModel.make({ id: "gpt-5", provider: "openai", route })
+      yield* s.llm.push(TestLLM.tool("goal-read-empty", "goal_read", {}), TestLLM.text("No goal", "goal-read-done"))
+      yield* s.runPrompt("Read the current goal")
+
+      const compiled = yield* compileRequest(s.requests[0])
+      for (const [name, parameters] of [
+        ["goal_read", { type: "object", properties: {}, additionalProperties: false }],
+        ["goal_report", expect.objectContaining({ type: "object", required: ["id", "revision", "status"] })],
+      ] as const) {
+        expect(compiled.body.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining(
+              route === OpenAIResponses.route
+                ? { type: "function", name, parameters }
+                : { type: "function", function: expect.objectContaining({ name, parameters }) },
+            ),
+          ]),
+        )
+      }
+      expect(yield* s.session.getGoal(sessionID)).toBeUndefined()
+      expect(
+        (yield* s.messages)
+          .flatMap((message) => (message.type === "assistant" ? message.content : []))
+          .find((part) => part.type === "tool" && part.id === "goal-read-empty"),
+      ).toMatchObject({ state: { status: "completed", content: [{ type: "text", text: "null" }] } })
+
+      const goal = yield* s.session.setGoal({ sessionID, text: "Read without changing the objective" })
+      yield* s.llm.push(TestLLM.tool("goal-read-active", "goal_read", {}), TestLLM.text("Read goal", "goal-active-done"))
+      yield* s.runPrompt("Read the active goal")
+      expect(
+        (yield* s.messages)
+          .flatMap((message) => (message.type === "assistant" ? message.content : []))
+          .find((part) => part.type === "tool" && part.id === "goal-read-active"),
+      ).toMatchObject({ state: { status: "completed", content: [{ type: "text", text: JSON.stringify(goal) }] } })
+      expect(yield* s.session.getGoal(sessionID)).toEqual(goal)
+    })
+  }
+
   scenario("goal tools expose only read and terminal reports and reject objective mutation", function* (s) {
     const tools = yield* Tool.Service
     yield* GoalTool.Plugin.effect(
