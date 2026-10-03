@@ -17,7 +17,8 @@ export const Plugin = {
         name: "goal_read",
         options: { codemode: false },
         description: "Read the current session goal and its identity/revision. This does not change it or start work.",
-        input: Schema.Struct({}),
+        // Empty Effect structs also accept arrays, which providers reject as function parameters.
+        input: { type: "object", properties: {}, additionalProperties: false },
         output: Schema.Struct({ goal: Schema.NullOr(SessionSchema.Goal) }),
         execute: (_, context) =>
           permission
