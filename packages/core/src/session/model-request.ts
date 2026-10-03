@@ -40,6 +40,8 @@ import { SessionSchema } from "./schema.js"
 import { SessionSystemPrompt } from "./system-prompt.js"
 import { toLLMMessages } from "./runner/to-llm-message.js"
 import type { SessionMessage } from "./message.js"
+import { SessionGoal } from "./goal.js"
+import { SessionStore } from "./store.js"
 
 const IMAGE_BYTES_TRIGGER = 25 * 1024 * 1024 // 25 MiB
 const IMAGE_BYTES_TARGET = 15 * 1024 * 1024 // 15 MiB
@@ -61,6 +63,7 @@ const OUTPUT_TOKEN_MIN = 1_024
 export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.CancelledError
 
 export interface Prepared<Event = SessionRequest> {
+  readonly canReportGoal: boolean
   readonly event: Event
   readonly request: LLMRequest
   readonly options: StreamOptions
@@ -234,6 +237,7 @@ export const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const transport = yield* SessionModelTransport.Service
     const app = yield* App.Metadata
+    const store = yield* SessionStore.Service
     const prepare = Effect.fn("SessionModelRequest.prepare")(function* <
       S extends SessionRequest & { tools?: Definitions },
     >(kind: SessionRequestKind, input: Input, shape: (draft: SessionRequest, tools: Definitions) => Effect.Effect<S>) {
@@ -278,6 +282,8 @@ export const layer = Layer.effect(
       const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields
       const providerOptions = Object.fromEntries(entries.filter(([k]) => !GENERATION_KEYS.has(k)))
       const affinity = SessionAffinity.get(session)
+      // FORK: the session's persistent goal rides along as a system part on primary requests.
+      const goal = kind === "primary" ? (yield* store.get(session.id))?.goal : undefined
       const base = LLM.request({
         model: model.model,
         http: {
@@ -295,7 +301,12 @@ export const layer = Layer.effect(
         },
         // TODO: Persist cache lineage so nested forks reuse the root session's cache key.
         promptCacheKey: /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity,
-        system: shaped.system,
+        // Only where the goal tools are registered: a host without them (tests, stripped tool sets) sends
+        // upstream's exact request.
+        system:
+          kind === "primary" && (goal || Array.from(hooked).some(([, t]) => t.name === "goal_report"))
+            ? [...shaped.system, SystemPart.make(SessionGoal.reminder(goal ?? undefined))]
+            : shaped.system,
         messages: boundImages(unsupportedParts(shaped.messages, model.capabilities, model.model.provider)),
         tools: Array.from(hooked, ([name, t]) => ({ ...t, name })),
         toolChoice: input.toolChoice,
@@ -394,6 +405,13 @@ export const layer = Layer.effect(
           : undefined
 
       return {
+        canReportGoal:
+          model.capabilities.tools &&
+          request.toolChoice?.type !== "none" &&
+          Array.from(hooked).some(
+            ([name, tool]) =>
+              tool.name === "goal_report" && (request.toolChoice?.type !== "tool" || request.toolChoice.name === name),
+          ),
         event: shaped,
         request,
         options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
@@ -435,5 +453,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, SessionModelTransport.node, App.node],
+  deps: [PluginHooks.node, SessionModelTransport.node, App.node, SessionStore.node],
 })

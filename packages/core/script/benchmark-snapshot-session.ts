@@ -149,6 +149,7 @@ const run = (snapshots: Layer.Layer<Snapshot.Service>) =>
             retry: () => Effect.void,
             request: LLM.request({ model: model.model, prompt: "bench" }),
             options: {},
+            canReportGoal: false, // FORK
             executeTool: (input) =>
               Effect.gen(function* () {
                 if (input.call.name === "edit")

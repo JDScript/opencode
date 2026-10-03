@@ -7,3 +7,5 @@ export type ID = typeof ID.Type
 
 export const Info = Session.Info
 export type Info = Session.Info
+export const Goal = Session.Goal
+export type Goal = Session.Goal

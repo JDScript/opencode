@@ -75,6 +75,23 @@ export const layer = (options?: Options) =>
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
       const prepareResume = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+        const goal = (yield* store.get(sessionID))?.goal
+        const autonomous = yield* store.executionGoal(sessionID)
+        // Recover ordinary user work, but never launch fresh automation at server boot.
+        if (goal?.status === "active" && goal.autoContinue)
+          yield* bus.publish(SessionEvent.Goal.StatusChanged, {
+            sessionID,
+            status: "paused",
+            reason: "Server restarted; resume explicitly",
+          })
+        if (autonomous) {
+          yield* bus.publish(
+            SessionEvent.Execution.Interrupted,
+            { sessionID, reason: "shutdown" },
+            { commit: () => store.release(sessionID) },
+          )
+          return false
+        }
         // Durable before the resume runs, so a crash inside the resumed turn is
         // counted by the next sweep and the budget cannot be dodged.
         const attempts = yield* store.countResume(sessionID)

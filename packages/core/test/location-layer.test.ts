@@ -486,6 +486,8 @@ describe("LocationServiceMap", () => {
           expect(blockedTools.filter((name) => name !== "execute").sort()).toEqual([
             "edit",
             "glob",
+            "goal_read", // FORK
+            "goal_report", // FORK
             "grep",
             "patch",
             "question",
@@ -505,6 +507,8 @@ describe("LocationServiceMap", () => {
           expect(allowedTools.filter((name) => name !== "execute").sort()).toEqual([
             "edit",
             "glob",
+            "goal_read", // FORK
+            "goal_report", // FORK
             "grep",
             "patch",
             "question",

@@ -42,6 +42,9 @@ export const SessionTable = sqliteTable(
     summary_files: integer(),
     summary_diffs: text({ mode: "json" }).$type<FileDiff.LegacyInfo[]>(),
     metadata: text({ mode: "json" }).$type<Session.Metadata>(),
+    goal: text({ mode: "json" }).$type<Session.Goal>(),
+    /** Process-local claim origin, committed with autonomous continuation admission. */
+    execution_goal: text({ mode: "json" }).$type<{ id: string; revision: number }>(),
     cost: real().notNull().default(0),
     tokens_input: integer().notNull().default(0),
     tokens_output: integer().notNull().default(0),

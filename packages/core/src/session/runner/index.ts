@@ -18,7 +18,7 @@ export type RunError =
   | Instructions.InitializationBlocked
   | FileSystem.DirectoryNotFoundError
 
-export type Continuation = { readonly step: number }
+export type Continuation = { readonly step: number; readonly goal?: { readonly id: string; readonly revision: number } }
 
 export type DrainResult = Data.TaggedEnum<{
   Complete: {}

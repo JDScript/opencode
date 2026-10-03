@@ -44,6 +44,7 @@ import { EventLog } from "@opencode/schema/event-log"
 import { FileDiff } from "@opencode/schema/file-diff"
 import { Form } from "@opencode/schema/form"
 import { PublicSessionMessage } from "./message.js"
+import { SessionGoal } from "@opencode/schema/session-goal"
 
 const ParentIDFilter = Schema.Union([
   Session.ID,
@@ -295,6 +296,69 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
           description: "Retrieve a session by ID.",
         }),
       ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.getGoal", "/api/session/:sessionID/goal", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.NullOr(Session.Goal) }),
+        error: SessionNotFoundError,
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.getGoal", summary: "Read session goal" })),
+    )
+    .add(
+      HttpApiEndpoint.put("session.setGoal", "/api/session/:sessionID/goal", {
+        params: { sessionID: Session.ID },
+        payload: SessionGoal.Set,
+        success: Schema.Struct({ data: Schema.NullOr(Session.Goal) }),
+        error: SessionNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.setGoal",
+          summary: "Set or replace session goal",
+          description:
+            "Creates a fresh objective and continuation budget. Does not start execution. Automation defaults off.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.patch("session.updateGoal", "/api/session/:sessionID/goal", {
+        params: { sessionID: Session.ID },
+        payload: SessionGoal.Update,
+        success: Schema.Struct({ data: Schema.NullOr(Session.Goal) }),
+        error: [SessionNotFoundError, ConflictError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.updateGoal",
+          summary: "Edit session goal",
+          description: "Preserves cumulative continuation usage. Does not start execution or change status.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.pauseGoal", "/api/session/:sessionID/goal/pause", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.NullOr(Session.Goal) }),
+        error: [SessionNotFoundError, ConflictError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.pauseGoal", summary: "Pause session goal" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.resumeGoal", "/api/session/:sessionID/goal/resume", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.NullOr(Session.Goal) }),
+        error: [SessionNotFoundError, ConflictError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.resumeGoal",
+          summary: "Activate session goal",
+          description: "Changes goal status only. Does not start execution, reset usage, or enable automation.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.clearGoal", "/api/session/:sessionID/goal", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.clearGoal", summary: "Clear session goal" })),
     )
     .add(
       HttpApiEndpoint.delete("session.remove", "/api/session/:sessionID", {
