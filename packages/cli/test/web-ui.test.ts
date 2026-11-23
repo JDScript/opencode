@@ -237,7 +237,7 @@ describe("web UI", () => {
     const index = `<html><script id="oc-theme-preload-script">${preload}</script><body>host</body></html>`
     const shell = "<html><base href='about:blank'><script>console.log('preview')</script></html>"
     const hostCsp =
-      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:; worker-src 'self' blob:"
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src * data: blob:; worker-src 'self' blob:"
     const indexCsp = hostCsp.replace(
       "'wasm-unsafe-eval'",
       `'wasm-unsafe-eval' 'sha256-${createHash("sha256").update(preload).digest("base64")}'`,
