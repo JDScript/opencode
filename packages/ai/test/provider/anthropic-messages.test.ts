@@ -923,13 +923,11 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
-  it.effect("demotes unsigned reasoning when signatures are required", () =>
+  it.effect("drops unsigned reasoning when signatures are required", () =>
     Effect.gen(function* () {
       const prepared = yield* compileUnsignedReasoning(model)
 
-      expect(prepared.body.messages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "unsigned reasoning" }] },
-      ])
+      expect(prepared.body.messages).toEqual([])
     }),
   )
 
@@ -976,9 +974,7 @@ describe("Anthropic Messages route", () => {
         .model({ id: "k3", compatibility: { requireSignature: true } })
       const prepared = yield* compileUnsignedReasoning(compatible)
 
-      expect(prepared.body.messages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "unsigned reasoning" }] },
-      ])
+      expect(prepared.body.messages).toEqual([])
     }),
   )
 
